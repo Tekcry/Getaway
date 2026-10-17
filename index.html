@@ -55,7 +55,7 @@ input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-tra
 .stat{color:#9bf6a0}
 .warn{color:#ff7a7a}
 </style>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -63,7 +63,7 @@ input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-tra
 <div id="sTitle" class="screen show">
   <h1>Getaway</h1>
   <p class="sub">3-player online co-op chase. Driver, Gunner, Dispatcher.</p>
-  <div class="row"><button id="bHost">Host game</button><button id="bJoin" class="alt">Join game</button></div>
+  <div class="row"><button id="bHost" disabled>Host game</button><button id="bJoin" class="alt" disabled>Join game</button></div>
   <div class="err" id="eTitle"></div>
 </div>
 
@@ -288,8 +288,39 @@ function buildWorld(c) {
 const wheelGeo = new THREE.BoxGeometry(0.35, 0.7, 0.7), wheelMat = new THREE.MeshLambertMaterial({ color: 0x151515 });
 function addWheels(g) { for (const sx of [-1, 1]) for (const sz of [-1.4, 1.4]) { const w = new THREE.Mesh(wheelGeo, wheelMat); w.position.set(sx * 1.0, 0.35, sz); g.add(w); } }
 function box(w, h, d, mat, x, y, z) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); return m; }
+
+/* CC0 Kenney Car Kit models (assets/cars). CARS stays null if any fails to load, and the box cars are used instead */
+let CARS = null;
+const CAR_FILES = { car: 'sedan-sports', cruiser: 'police', interceptor: 'race', heavy: 'suv', civ0: 'sedan', civ1: 'taxi', civ2: 'hatchback-sports' };
+const POLICE_KEYS = ['cruiser', 'interceptor', 'heavy'];
+function fitModel(root) {   // rotate to face +Z (front wheels ahead of back wheels), scale into the 2 x 4.4 m hitbox, sit on y = 0
+  root.updateMatrixWorld(true);
+  const f = new THREE.Vector3(), b = new THREE.Vector3(), w = new THREE.Vector3(); let nf = 0, nb = 0;
+  root.traverse(o => {
+    if (o.isMesh) o.userData.shared = true;   // geometry shared by every clone: never dispose it
+    if (/wheel-front/.test(o.name)) { f.add(o.getWorldPosition(w)); nf++; } else if (/wheel-back/.test(o.name)) { b.add(o.getWorldPosition(w)); nb++; }
+  });
+  const inner = new THREE.Group(), outer = new THREE.Group(); inner.add(root); outer.add(inner);
+  if (nf && nb) { f.divideScalar(nf); b.divideScalar(nb); inner.rotation.y = -Math.atan2(f.x - b.x, f.z - b.z); }
+  let bb = new THREE.Box3().setFromObject(outer), sz = bb.getSize(new THREE.Vector3());
+  inner.scale.setScalar(Math.min(4.4 / sz.z, 2.2 / sz.x));
+  bb = new THREE.Box3().setFromObject(outer); const c = bb.getCenter(new THREE.Vector3());
+  inner.position.set(-c.x, -bb.min.y, -c.z);
+  outer.userData.h = bb.max.y - bb.min.y;
+  return outer;
+}
+async function loadCars() {
+  try {
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const loader = new GLTFLoader(), out = {};
+    await Promise.all(Object.entries(CAR_FILES).map(async ([k, f]) => { out[k] = fitModel((await loader.loadAsync('assets/cars/' + f + '.glb')).scene); }));
+    out.interceptor.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setHex(0x3a3c44); } });   // repaint dark
+    CARS = out;
+  } catch (e) { console.warn('Vehicle models failed to load, using box cars', e); CARS = null; }
+}
 function makeCar() {
   const g = new THREE.Group();
+  if (CARS) { g.add(CARS.car.clone(true)); return g; }
   const body = new THREE.MeshLambertMaterial({ color: 0xe8402a });
   g.add(box(2, 0.7, 4.4, body, 0, 0.75, 0));
   g.add(box(1.7, 0.6, 2.2, new THREE.MeshLambertMaterial({ color: 0x222a33 }), 0, 1.4, -0.2));
@@ -299,8 +330,12 @@ const circGeo = new THREE.CircleGeometry(1, 24), ringGeo = new THREE.RingGeometr
 function marker(geo, color, radius, y) {
   const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color })); m.rotation.x = -Math.PI / 2; m.scale.set(radius, radius, 1); m.position.y = y; m.layers.set(1); return m;
 }
-const carMesh = makeCar(); scene.add(carMesh);
+let carMesh = makeCar(); scene.add(carMesh);
 const carMarker = marker(circGeo, 0xb6ff00, 10, 82); carMesh.add(carMarker);
+loadCars().then(() => {   // the lobby buttons stay disabled until the models are loaded (or have failed)
+  if (CARS) { scene.remove(carMesh); carMesh = makeCar(); carMesh.add(carMarker); scene.add(carMesh); }
+  $('bHost').disabled = $('bJoin').disabled = false;
+});
 
 const checkpoint = new THREE.Group();
 const cpCol = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.5, 220, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0x33ffee, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
@@ -317,24 +352,34 @@ const PLOOK = [
   { body: 0x23324a, stripe: 0xe8e8e8, cab: 0x141a24, bh: 1.0, roof: 2.15, mk: 9 }
 ];
 function makePolice(k) {
-  const g = new THREE.Group(), L = PLOOK[k] || PLOOK[0];
-  const mBody = new THREE.MeshLambertMaterial({ color: L.body }), mStripe = new THREE.MeshLambertMaterial({ color: L.stripe }), mCab = new THREE.MeshLambertMaterial({ color: L.cab });
-  g.add(box(2, L.bh, 4.4, mBody, 0, 0.4 + L.bh / 2, 0));
-  g.add(box(2.04, 0.3, 4.44, mStripe, 0, 0.4 + L.bh / 2 - 0.05, 0));
-  g.add(box(1.7, L.roof - 0.4 - L.bh - 0.12, k === 2 ? 2.9 : 2.2, mCab, 0, (0.4 + L.bh + L.roof - 0.12) / 2, k === 2 ? -0.5 : -0.2));
-  addWheels(g);
+  const g = new THREE.Group(), L = Object.assign({}, PLOOK[k] || PLOOK[0]);
+  let mats;
+  if (CARS) {   // own material copies so this car alone can turn black when destroyed
+    const m = CARS[POLICE_KEYS[k] || 'cruiser'].clone(true); mats = [];
+    m.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); mats.push(o.material); } });
+    g.add(m); L.roof = m.userData.h + 0.1;
+  } else {
+    const mBody = new THREE.MeshLambertMaterial({ color: L.body }), mStripe = new THREE.MeshLambertMaterial({ color: L.stripe }), mCab = new THREE.MeshLambertMaterial({ color: L.cab });
+    g.add(box(2, L.bh, 4.4, mBody, 0, 0.4 + L.bh / 2, 0));
+    g.add(box(2.04, 0.3, 4.44, mStripe, 0, 0.4 + L.bh / 2 - 0.05, 0));
+    g.add(box(1.7, L.roof - 0.4 - L.bh - 0.12, k === 2 ? 2.9 : 2.2, mCab, 0, (0.4 + L.bh + L.roof - 0.12) / 2, k === 2 ? -0.5 : -0.2));
+    addWheels(g); mats = [mBody, mStripe, mCab];
+  }
   const l1 = new THREE.MeshBasicMaterial({ color: 0xff2020 }), l2 = new THREE.MeshBasicMaterial({ color: 0x2060ff });
   g.add(box(0.7, 0.25, 0.4, l1, -0.45, L.roof, -0.2)); g.add(box(0.7, 0.25, 0.4, l2, 0.45, L.roof, -0.2));
   const mk = marker(circGeo, 0xff3344, L.mk, 80); g.add(mk);
-  g.userData = { mats: [mBody, mStripe, mCab], l1, l2, mk, dead: false, sm: 0, k };
+  g.userData = { mats, l1, l2, mk, dead: false, sm: 0, k };
   return g;
 }
 const CIV_COLS = [0x3a6fd8, 0xe8c020, 0x3f9a4a, 0xb0b4bc];
 function makeCiv(m) {
   const g = new THREE.Group();
-  g.add(box(2, 0.7, 4.4, new THREE.MeshLambertMaterial({ color: CIV_COLS[m % CIV_COLS.length] }), 0, 0.75, 0));
-  g.add(box(1.7, 0.6, 2.2, new THREE.MeshLambertMaterial({ color: 0x222a33 }), 0, 1.4, -0.2));
-  addWheels(g);
+  if (CARS) g.add(CARS['civ' + (m % 3)].clone(true));
+  else {
+    g.add(box(2, 0.7, 4.4, new THREE.MeshLambertMaterial({ color: CIV_COLS[m % CIV_COLS.length] }), 0, 0.75, 0));
+    g.add(box(1.7, 0.6, 2.2, new THREE.MeshLambertMaterial({ color: 0x222a33 }), 0, 1.4, -0.2));
+    addWheels(g);
+  }
   g.add(marker(circGeo, 0x9a9a9a, 3, 78));
   g.userData.m = m;
   return g;
@@ -803,7 +848,7 @@ function syncScene(dt) {
     }
   }
   for (const [id, m] of pMeshes) if (!V.police.has(id)) {
-    scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo) o.geometry.dispose(); }); pMeshes.delete(id);
+    scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo && !o.userData.shared) o.geometry.dispose(); }); pMeshes.delete(id);
   }
   V.traffic.forEach((t, i) => {
     let m = tMeshes[i];
@@ -962,7 +1007,7 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-window.__dbg = { frame, renderer, get S() { return S; }, get V() { return V; }, keys, gun, get phase() { return phase; }, get role() { return role; }, fire, get city() { return city; }, selectType, get dispType() { return dispType; }, pMeshes, tMeshes, hostStartRound, scene };
+window.__dbg = { frame, renderer, get S() { return S; }, get V() { return V; }, keys, gun, get phase() { return phase; }, get role() { return role; }, fire, get city() { return city; }, selectType, get dispType() { return dispType; }, pMeshes, tMeshes, hostStartRound, scene, get CARS() { return CARS; } };
 </script>
 </body>
 </html>
