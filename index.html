@@ -37,6 +37,7 @@ input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-tra
 #hDriver{position:absolute;inset:0}
 #speed{position:absolute;bottom:34px;right:30px;font-size:44px;font-weight:800;text-shadow:0 2px 6px #000}
 #dist{position:absolute;bottom:34px;left:30px;font-size:26px;font-weight:700;text-shadow:0 2px 6px #000}
+#radar{position:absolute;top:16px;right:16px;width:180px;height:180px;border-radius:50%;background:#0b0f18cc;border:2px solid #ffffff55}
 #arrow{position:absolute;top:120px;left:50%;margin-left:-32px;width:64px;height:64px;filter:drop-shadow(0 2px 4px #000)}
 #hGunner{position:absolute;inset:0}
 #cross{position:absolute;top:50%;left:50%;width:30px;height:30px;margin:-15px 0 0 -15px}
@@ -107,6 +108,7 @@ input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-tra
   <div id="hTime">3:00</div>
   <div id="bust"><b>BUSTED</b><div id="bustBar"><div id="bustFill"></div></div></div>
   <div id="hDriver" class="hg">
+    <canvas id="radar" width="180" height="180"></canvas>
     <svg id="arrow" viewBox="0 0 64 64"><path d="M32 4 L58 56 L32 44 L6 56 Z" fill="#ffb020" stroke="#000" stroke-width="3" stroke-linejoin="round"/></svg>
     <div id="dist">0 m</div>
     <div id="speed">0 km/h</div>
@@ -309,12 +311,26 @@ function fitModel(root) {   // rotate to face +Z (front wheels ahead of back whe
   outer.userData.h = bb.max.y - bb.min.y;
   return outer;
 }
+function recolourRedToBlue(model) {   // copy the shared palette texture and swap red/blue in its strongly red swatches
+  let tex = null; model.traverse(o => { if (o.isMesh && o.material.map) tex = o.material.map; });
+  if (!tex || !tex.image) return;
+  const c = document.createElement('canvas'); c.width = tex.image.width; c.height = tex.image.height;
+  const x = c.getContext('2d'); x.drawImage(tex.image, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) if (p[i] > p[i + 1] + 60 && p[i] > p[i + 2] + 60) { const r = p[i]; p[i] = p[i + 2]; p[i + 2] = r; }
+  x.putImageData(d, 0, 0);
+  const t2 = tex.clone(); t2.image = c; t2.needsUpdate = true;
+  model.traverse(o => { if (o.isMesh && o.material.map === tex) { o.material = o.material.clone(); o.material.map = t2; } });
+}
 async function loadCars() {
   try {
     const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
     const loader = new GLTFLoader(), out = {};
     await Promise.all(Object.entries(CAR_FILES).map(async ([k, f]) => { out[k] = fitModel((await loader.loadAsync('assets/cars/' + f + '.glb')).scene); }));
     out.interceptor.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setHex(0x3a3c44); } });   // repaint dark
+    out.heavy.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setHex(0x7a88a6); } });   // darker, bulkier SUV (looks only)
+    out.heavy.scale.y = 1.12; out.heavy.userData.h *= 1.12;
+    recolourRedToBlue(out.civ0);   // the traffic sedan is red like the getaway car: make it blue
     CARS = out;
   } catch (e) { console.warn('Vehicle models failed to load, using box cars', e); CARS = null; }
 }
@@ -961,6 +977,20 @@ function hud() {
   if (isHost) return S ? { left: S.left, budget: S.budget, cd: S.cd, bust: S.bust } : null;
   return lastSnap ? { left: lastSnap.tl, budget: lastSnap.b, cd: lastSnap.cd, bust: lastSnap.bu } : null;
 }
+const radarCtx = $('radar').getContext('2d'), RADAR_RANGE = 120;
+function drawRadar() {   // car-up radar: police red (wrecks dark), traffic grey, checkpoint cyan (on the rim when out of range)
+  const x = radarCtx, c = V.car, fx = Math.sin(c.th), fz = Math.cos(c.th), K = 84 / RADAR_RANGE;
+  const pos = (wx, wz) => { const dx = wx - c.x, dz = wz - c.z; return [90 + (dx * -fz + dz * fx) * K, 90 - (dx * fx + dz * fz) * K]; };
+  const dot = (wx, wz, r, col) => { const [px, py] = pos(wx, wz); if (Math.hypot(px - 90, py - 90) > 86) return; x.fillStyle = col; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill(); };
+  x.clearRect(0, 0, 180, 180);
+  x.strokeStyle = '#ffffff22'; x.beginPath(); x.arc(90, 90, 42, 0, 7); x.stroke();
+  for (const t of V.traffic) dot(t.x, t.z, 2.5, '#9a9a9a');
+  for (const p of V.police.values()) dot(p.x, p.z, p.k === 2 ? 4.5 : 3.5, p.st === 2 ? '#553333' : '#ff3344');
+  const cp = city.checkpoint, [qx, qy] = pos(cp.x, cp.z), d = Math.hypot(qx - 90, qy - 90);
+  const k = d > 82 ? 82 / d : 1;
+  x.fillStyle = '#33ffee'; x.beginPath(); x.arc(90 + (qx - 90) * k, 90 + (qy - 90) * k, 5, 0, 7); x.fill();
+  x.fillStyle = '#b6ff00'; x.beginPath(); x.moveTo(90, 83); x.lineTo(95, 96); x.lineTo(85, 96); x.fill();
+}
 const cache = {};
 function setText(id, v) { if (cache[id] !== v) { cache[id] = v; $(id).textContent = v; } }
 function updateHud() {
@@ -971,6 +1001,7 @@ function updateHud() {
     const cp = city.checkpoint, dx = cp.x - V.car.x, dz = cp.z - V.car.z;
     setText('speed', Math.round(Math.abs(V.car.sp) * 3.6) + ' km/h'); setText('dist', Math.round(Math.hypot(dx, dz)) + ' m to checkpoint');
     $('arrow').style.transform = `rotate(${-(Math.atan2(dx, dz) - V.car.th)}rad)`;
+    drawRadar();
   } else if (role === 'gunner') {
     setText('ammo', gun.reload > 0 ? 'RELOADING' : gun.ammo + ' / 12');
     $('aimHint').style.display = document.pointerLockElement === renderer.domElement ? 'none' : 'block';
@@ -982,6 +1013,37 @@ function updateHud() {
     $('dCd').className = h.cd > 0 ? 'warn' : 'stat'; $('dBud').className = poor ? 'warn' : 'stat'; $('dSel').className = poor ? 'warn' : 'stat';
     for (const b of document.querySelectorAll('#dtypes .pt')) { const k = +b.dataset.k; b.classList.toggle('sel', k === dispType); b.classList.toggle('poor', h.budget < PTYPES[k].cost); }
   }
+}
+
+/* ================= audio (synthesised with Web Audio, no sound files) ================= */
+let AC = null, eng = null, sir = null;
+function initAudio() {   // browsers only allow audio after a click or key press
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+  AC = new Ctx();
+  const master = AC.createGain(); master.gain.value = 0.5; master.connect(AC.destination);
+  // engine: two sawtooths a fifth apart through a low-pass filter, pitch follows speed
+  const eg = AC.createGain(), lp = AC.createBiquadFilter(), o1 = AC.createOscillator(), o2 = AC.createOscillator();
+  eg.gain.value = 0; lp.type = 'lowpass'; o1.type = o2.type = 'sawtooth'; o2.detune.value = 12;
+  o1.connect(lp); o2.connect(lp); lp.connect(eg); eg.connect(master); o1.start(); o2.start();
+  eng = { o1, o2, lp, g: eg };
+  // siren: a slow LFO sweeps a filtered sawtooth up and down (wail), louder as police get closer
+  const sg = AC.createGain(), so = AC.createOscillator(), sl = AC.createBiquadFilter(), lfo = AC.createOscillator(), lg = AC.createGain();
+  sg.gain.value = 0; so.type = 'sawtooth'; so.frequency.value = 760; sl.type = 'lowpass'; sl.frequency.value = 1800;
+  lfo.frequency.value = 0.55; lg.gain.value = 230; lfo.connect(lg); lg.connect(so.frequency);
+  so.connect(sl); sl.connect(sg); sg.connect(master); so.start(); lfo.start();
+  sir = { g: sg };
+}
+window.addEventListener('pointerdown', initAudio); window.addEventListener('keydown', initAudio);
+function updateAudio() {
+  if (!AC) return;
+  const on = phase === 'play' && role !== 'dispatcher', t = AC.currentTime, sp = Math.abs(V.car.sp), f = 42 + sp * 4.2;
+  eng.o1.frequency.setTargetAtTime(f, t, 0.05); eng.o2.frequency.setTargetAtTime(f * 1.5, t, 0.05);
+  eng.lp.frequency.setTargetAtTime(300 + sp * 40, t, 0.05);
+  eng.g.gain.setTargetAtTime(on ? 0.07 + sp / CAR_MAX * 0.08 : 0, t, 0.1);
+  let near = Infinity;
+  for (const p of V.police.values()) if (p.st !== 2) near = Math.min(near, Math.hypot(p.x - V.car.x, p.z - V.car.z));
+  sir.g.gain.setTargetAtTime(on ? 0.06 * clamp(1 - near / 150, 0, 1) ** 1.5 : 0, t, 0.15);
 }
 
 /* ================= input ================= */
@@ -1004,10 +1066,11 @@ function frame(now) {
     updateView(); syncScene(dt); updateCamera(dt); updateGun(dt); updateHud();
     renderer.render(scene, cam);
   }
+  updateAudio();
 }
 requestAnimationFrame(frame);
 
-window.__dbg = { frame, renderer, get S() { return S; }, get V() { return V; }, keys, gun, get phase() { return phase; }, get role() { return role; }, fire, get city() { return city; }, selectType, get dispType() { return dispType; }, pMeshes, tMeshes, hostStartRound, scene, get CARS() { return CARS; } };
+window.__dbg = { frame, renderer, get S() { return S; }, get V() { return V; }, keys, gun, get phase() { return phase; }, get role() { return role; }, fire, get city() { return city; }, selectType, get dispType() { return dispType; }, pMeshes, tMeshes, hostStartRound, scene, get CARS() { return CARS; }, get audio() { return AC && { state: AC.state, eng: eng.g.gain.value, sir: sir.g.gain.value, hz: eng.o1.frequency.value }; } };
 </script>
 </body>
 </html>
