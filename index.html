@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Getaway</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#12141a;color:#fff;font-family:system-ui,Segoe UI,Roboto,sans-serif;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:none;touch-action:none}
+.screen{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:radial-gradient(circle at 50% 30%,#26304a,#0c0e14);z-index:10;text-align:center;padding:20px}
+.screen.show{display:flex}
+.screen.overlay{background:rgba(5,7,12,.78)}
+h1{font-size:64px;margin:0;letter-spacing:8px;text-transform:uppercase}
+h2{margin:0;font-size:34px}
+.sub{opacity:.7;margin:0}
+button{font:inherit;font-size:20px;padding:12px 30px;border:0;border-radius:8px;background:#ffb020;color:#111;cursor:pointer;font-weight:700;min-width:200px}
+button:hover:not(:disabled){background:#ffc850}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.alt{background:#3a4560;color:#fff}
+input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-transform:uppercase;width:230px;padding:10px;border-radius:8px;border:2px solid #4a5675;background:#10131c;color:#fff}
+.code{font-size:96px;letter-spacing:16px;font-weight:800;color:#ffb020;font-family:Consolas,monospace}
+.plist{display:flex;flex-direction:column;gap:6px;min-width:300px;text-align:left;background:#0006;padding:14px 20px;border-radius:10px}
+.plist div{display:flex;justify-content:space-between;gap:30px}
+.on{color:#6f6}.off{color:#888}
+.err{color:#ff6b6b;min-height:22px}
+.row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+#hud{position:fixed;inset:0;pointer-events:none;display:none;z-index:5}
+#hTime{position:absolute;top:12px;left:50%;transform:translateX(-50%);font-size:40px;font-weight:800;text-shadow:0 2px 6px #000;font-variant-numeric:tabular-nums}
+#hRole{position:absolute;top:14px;left:16px;font-weight:700;opacity:.85;text-shadow:0 1px 4px #000}
+#hHint{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);opacity:.75;font-size:14px;text-shadow:0 1px 4px #000;white-space:nowrap}
+#bust{position:absolute;top:70px;left:50%;transform:translateX(-50%);width:min(420px,80vw);display:none;text-align:center}
+#bust b{color:#ff4040;font-size:26px;letter-spacing:6px;text-shadow:0 2px 6px #000}
+#bustBar{height:16px;border:2px solid #fff;border-radius:8px;overflow:hidden;background:#0008}
+#bustFill{height:100%;width:0;background:#ff3030}
+.hg{display:none}
+#hDriver{position:absolute;inset:0}
+#speed{position:absolute;bottom:34px;right:30px;font-size:44px;font-weight:800;text-shadow:0 2px 6px #000}
+#dist{position:absolute;bottom:34px;left:30px;font-size:26px;font-weight:700;text-shadow:0 2px 6px #000}
+#arrow{position:absolute;top:120px;left:50%;margin-left:-32px;width:64px;height:64px;filter:drop-shadow(0 2px 4px #000)}
+#hGunner{position:absolute;inset:0}
+#cross{position:absolute;top:50%;left:50%;width:30px;height:30px;margin:-15px 0 0 -15px}
+#cross:before,#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 3px #000}
+#cross:before{left:14px;top:0;width:2px;height:30px}
+#cross:after{top:14px;left:0;height:2px;width:30px}
+#cross i{position:absolute;inset:11px;border-radius:50%;border:2px solid #ff4040}
+#ammo{position:absolute;bottom:34px;right:30px;font-size:44px;font-weight:800;text-shadow:0 2px 6px #000}
+#aimHint{position:absolute;top:60%;left:50%;transform:translateX(-50%);font-size:22px;background:#000a;padding:8px 18px;border-radius:8px}
+#hDisp{position:absolute;inset:0}
+#dbox{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:#000b;border-radius:12px;padding:10px 22px;display:flex;gap:26px;font-size:20px;font-weight:700;white-space:nowrap}
+.stat{color:#9bf6a0}
+.warn{color:#ff7a7a}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+<div id="sTitle" class="screen show">
+  <h1>Getaway</h1>
+  <p class="sub">3-player online co-op chase. Driver, Gunner, Dispatcher.</p>
+  <div class="row"><button id="bHost">Host game</button><button id="bJoin" class="alt">Join game</button></div>
+  <div class="err" id="eTitle"></div>
+</div>
+
+<div id="sHost" class="screen">
+  <h2>Your room code</h2>
+  <div class="code" id="hostCode">....</div>
+  <p class="sub">Friends choose "Join game" and enter this code. You are the Driver.</p>
+  <div class="plist" id="hostList"></div>
+  <div class="row"><button id="bStart" disabled>Start</button><button id="bHostBack" class="alt">Back</button></div>
+  <div class="err" id="eHost"></div>
+</div>
+
+<div id="sJoin" class="screen">
+  <h2>Join game</h2>
+  <input id="joinCode" maxlength="4" placeholder="CODE" autocomplete="off">
+  <button id="bConnect">Connect</button>
+  <div id="rolePick" style="display:none;flex-direction:column;gap:12px;align-items:center">
+    <p class="sub">Pick your role</p>
+    <div class="row"><button id="bGunner">Gunner</button><button id="bDisp">Dispatcher</button></div>
+  </div>
+  <div class="plist" id="joinList" style="display:none"></div>
+  <p class="sub" id="joinWait" style="display:none">Waiting for the host to start...</p>
+  <button id="bJoinBack" class="alt">Back</button>
+  <div class="err" id="eJoin"></div>
+</div>
+
+<div id="sEnd" class="screen overlay">
+  <h1 id="endTitle" style="font-size:56px"></h1>
+  <div class="plist" id="endStats"></div>
+  <button id="bAgain">Play again</button>
+  <p class="sub" id="endWait">Waiting for the host to start a new round...</p>
+</div>
+
+<div id="sLeft" class="screen overlay">
+  <h2>Host left</h2>
+  <button id="bLeft">Back to title screen</button>
+</div>
+
+<div id="hud">
+  <div id="hRole"></div>
+  <div id="hTime">3:00</div>
+  <div id="bust"><b>BUSTED</b><div id="bustBar"><div id="bustFill"></div></div></div>
+  <div id="hDriver" class="hg">
+    <svg id="arrow" viewBox="0 0 64 64"><path d="M32 4 L58 56 L32 44 L6 56 Z" fill="#ffb020" stroke="#000" stroke-width="3" stroke-linejoin="round"/></svg>
+    <div id="dist">0 m</div>
+    <div id="speed">0 km/h</div>
+  </div>
+  <div id="hGunner" class="hg">
+    <div id="cross"><i></i></div>
+    <div id="ammo">12 / 12</div>
+    <div id="aimHint">Click to aim</div>
+  </div>
+  <div id="hDisp" class="hg">
+    <div id="dbox"><span id="dBud">Budget 3/6</span><span id="dCd">Ready</span><span id="dPol">Police 0/8</span></div>
+  </div>
+  <div id="hHint"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ================= constants & helpers ================= */
+const GRID = 10, BLOCK = 40, ROAD = 14, PITCH = BLOCK + ROAD, SIZE = GRID * PITCH + ROAD;
+const R = i => ROAD / 2 + i * PITCH;            // centre of road line i (0..GRID)
+const CAR_MAX = 30, POLICE_MAX = CAR_MAX * 0.9, ROUND_TIME = 180, CAR_R = 1.8;
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const wrapA = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerpA = (a, b, t) => a + wrapA(b - a) * t;
+const r2 = v => Math.round(v * 100) / 100;
+const fmtTime = s => { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+/* ================= city (deterministic from seed) ================= */
+const NODES = [];
+for (let i = 0; i <= GRID; i++) for (let j = 0; j <= GRID; j++) NODES.push({ i, j, x: R(i), z: R(j) });
+const nid = (i, j) => i * (GRID + 1) + j;
+const ADJ = NODES.map(n => {
+  const a = [];
+  if (n.i > 0) a.push(nid(n.i - 1, n.j)); if (n.i < GRID) a.push(nid(n.i + 1, n.j));
+  if (n.j > 0) a.push(nid(n.i, n.j - 1)); if (n.j < GRID) a.push(nid(n.i, n.j + 1));
+  return a;
+});
+const nearestNode = (x, z) => nid(clamp(Math.round((x - R(0)) / PITCH), 0, GRID), clamp(Math.round((z - R(0)) / PITCH), 0, GRID));
+function bfs(from, to) {
+  if (from === to) return [from];
+  const prev = new Int16Array(NODES.length).fill(-1); prev[from] = from;
+  const q = [from];
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h];
+    if (c === to) break;
+    for (const n of ADJ[c]) if (prev[n] < 0) { prev[n] = c; q.push(n); }
+  }
+  const path = []; let c = to;
+  if (prev[c] < 0) return [from];
+  while (c !== from) { path.push(c); c = prev[c]; }
+  path.push(from); path.reverse();
+  return path;
+}
+function snapRoad(x, z) {
+  x = clamp(x, R(0), R(GRID)); z = clamp(z, R(0), R(GRID));
+  const sx = R(clamp(Math.round((x - R(0)) / PITCH), 0, GRID)), sz = R(clamp(Math.round((z - R(0)) / PITCH), 0, GRID));
+  return Math.abs(x - sx) <= Math.abs(z - sz) ? { x: sx, z, vertical: true } : { x, z: sz, vertical: false };
+}
+function genCity(seed) {
+  const rng = mulberry32(seed);
+  const buildings = [];
+  for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
+    const x0 = ROAD + i * PITCH, z0 = ROAD + j * PITCH;
+    const h = 10 + rng() * 30, g = 0.32 + rng() * 0.28;
+    buildings.push({ x0, x1: x0 + BLOCK, z0, z1: z0 + BLOCK, h, col: new THREE.Color(g, g, g * 1.06).getHex() });
+  }
+  const T = 20, WH = 14;
+  const walls = [
+    { x0: -T, x1: 0, z0: -T, z1: SIZE + T, h: WH }, { x0: SIZE, x1: SIZE + T, z0: -T, z1: SIZE + T, h: WH },
+    { x0: -T, x1: SIZE + T, z0: -T, z1: 0, h: WH }, { x0: -T, x1: SIZE + T, z0: SIZE, z1: SIZE + T, h: WH }
+  ];
+  const ci = rng() < 0.5 ? 0 : GRID, cj = rng() < 0.5 ? 0 : GRID;
+  const start = { x: R(ci), z: R(cj), th: cj === 0 ? 0 : Math.PI };
+  const cands = NODES.filter(n => Math.hypot(n.x - start.x, n.z - start.z) >= SIZE * 0.6);
+  const cp = cands[Math.floor(rng() * cands.length)];
+  return { buildings, walls, start, checkpoint: { x: cp.x, z: cp.z } };
+}
+
+/* collisions: circle vs AABB list. Returns push-out normal or null */
+let BOXES = [];
+function resolve(p, r) {
+  let hit = false, nx = 0, nz = 0;
+  for (const b of BOXES) {
+    if (p.x < b.x0 - r || p.x > b.x1 + r || p.z < b.z0 - r || p.z > b.z1 + r) continue;
+    const cx = clamp(p.x, b.x0, b.x1), cz = clamp(p.z, b.z0, b.z1);
+    let dx = p.x - cx, dz = p.z - cz; const d2 = dx * dx + dz * dz;
+    if (d2 >= r * r) continue;
+    if (d2 > 1e-8) {
+      const d = Math.sqrt(d2); dx /= d; dz /= d;
+      p.x += dx * (r - d); p.z += dz * (r - d); nx += dx; nz += dz; hit = true;
+    } else {
+      const l = p.x - b.x0, rr = b.x1 - p.x, t = p.z - b.z0, bt = b.z1 - p.z, m = Math.min(l, rr, t, bt);
+      if (m === l) { p.x = b.x0 - r; nx -= 1; } else if (m === rr) { p.x = b.x1 + r; nx += 1; }
+      else if (m === t) { p.z = b.z0 - r; nz -= 1; } else { p.z = b.z1 + r; nz += 1; }
+      hit = true;
+    }
+  }
+  if (!hit) return null;
+  const l = Math.hypot(nx, nz) || 1; return { nx: nx / l, nz: nz / l };
+}
+function los(x0, z0, x1, z1) {   // 2D segment vs buildings
+  const dx = x1 - x0, dz = z1 - z0;
+  for (const b of BOXES) {
+    let t0 = 0, t1 = 1, ok = true;
+    for (const [o, d, mn, mx] of [[x0, dx, b.x0, b.x1], [z0, dz, b.z0, b.z1]]) {
+      if (Math.abs(d) < 1e-9) { if (o < mn || o > mx) { ok = false; break; } }
+      else { let a = (mn - o) / d, c = (mx - o) / d; if (a > c) [a, c] = [c, a]; t0 = Math.max(t0, a); t1 = Math.min(t1, c); if (t0 > t1) { ok = false; break; } }
+    }
+    if (ok) return false;
+  }
+  return true;
+}
+function rayBox(ox, oy, oz, dx, dy, dz, mn, mx) {   // returns t or Infinity
+  let t0 = 0, t1 = Infinity;
+  const o = [ox, oy, oz], d = [dx, dy, dz];
+  for (let k = 0; k < 3; k++) {
+    if (Math.abs(d[k]) < 1e-9) { if (o[k] < mn[k] || o[k] > mx[k]) return Infinity; }
+    else { let a = (mn[k] - o[k]) / d[k], c = (mx[k] - o[k]) / d[k]; if (a > c) [a, c] = [c, a]; t0 = Math.max(t0, a); t1 = Math.min(t1, c); if (t0 > t1) return Infinity; }
+  }
+  return t0;
+}
+
+/* ================= three.js scene ================= */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9ec3e6);
+const FOG = new THREE.Fog(0x9ec3e6, 160, 560);
+scene.add(new THREE.HemisphereLight(0xdfeeff, 0x555566, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 1.0); sun.position.set(200, 400, 120); scene.add(sun);
+const persp = new THREE.PerspectiveCamera(70, 1, 0.1, 900);
+const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 800); ortho.layers.enable(1);
+let cam = persp;
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(SIZE + 80, SIZE + 80), new THREE.MeshLambertMaterial({ color: 0x2b2d33 }));
+ground.rotation.x = -Math.PI / 2; ground.position.set(SIZE / 2, 0, SIZE / 2); scene.add(ground);
+const lineMat = new THREE.MeshBasicMaterial({ color: 0x6d6a4a });
+for (let i = 0; i <= GRID; i++) {
+  const a = new THREE.Mesh(new THREE.PlaneGeometry(0.5, SIZE), lineMat); a.rotation.x = -Math.PI / 2; a.position.set(R(i), 0.03, SIZE / 2); scene.add(a);
+  const b = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, 0.5), lineMat); b.rotation.x = -Math.PI / 2; b.position.set(SIZE / 2, 0.03, R(i)); scene.add(b);
+}
+let cityGroup = null;
+function buildWorld(c) {
+  if (cityGroup) { scene.remove(cityGroup); cityGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
+  cityGroup = new THREE.Group();
+  for (const b of c.buildings) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(BLOCK, b.h, BLOCK), new THREE.MeshLambertMaterial({ color: b.col }));
+    m.position.set((b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2); cityGroup.add(m);
+  }
+  for (const w of c.walls) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w.x1 - w.x0, w.h, w.z1 - w.z0), new THREE.MeshLambertMaterial({ color: 0x80343a }));
+    m.position.set((w.x0 + w.x1) / 2, w.h / 2, (w.z0 + w.z1) / 2); cityGroup.add(m);
+  }
+  scene.add(cityGroup);
+  checkpoint.position.set(c.checkpoint.x, 0, c.checkpoint.z);
+}
+
+/* vehicles */
+const wheelGeo = new THREE.BoxGeometry(0.35, 0.7, 0.7), wheelMat = new THREE.MeshLambertMaterial({ color: 0x151515 });
+function addWheels(g) { for (const sx of [-1, 1]) for (const sz of [-1.4, 1.4]) { const w = new THREE.Mesh(wheelGeo, wheelMat); w.position.set(sx * 1.0, 0.35, sz); g.add(w); } }
+function box(w, h, d, mat, x, y, z) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); return m; }
+function makeCar() {
+  const g = new THREE.Group();
+  const body = new THREE.MeshLambertMaterial({ color: 0xe8402a });
+  g.add(box(2, 0.7, 4.4, body, 0, 0.75, 0));
+  g.add(box(1.7, 0.6, 2.2, new THREE.MeshLambertMaterial({ color: 0x222a33 }), 0, 1.4, -0.2));
+  addWheels(g); return g;
+}
+const circGeo = new THREE.CircleGeometry(1, 24), ringGeo = new THREE.RingGeometry(0.7, 1, 32);
+function marker(geo, color, radius, y) {
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color })); m.rotation.x = -Math.PI / 2; m.scale.set(radius, radius, 1); m.position.y = y; m.layers.set(1); return m;
+}
+const carMesh = makeCar(); scene.add(carMesh);
+const carMarker = marker(circGeo, 0xb6ff00, 10, 82); carMesh.add(carMarker);
+
+const checkpoint = new THREE.Group();
+const cpCol = new THREE.Mesh(new THREE.CylinderGeometry(3.5, 3.5, 220, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0x33ffee, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+cpCol.position.y = 110; checkpoint.add(cpCol);
+const cpCore = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 220, 8), new THREE.MeshBasicMaterial({ color: 0xffffff })); cpCore.position.y = 110; checkpoint.add(cpCore);
+const cpRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x33ffee, side: THREE.DoubleSide })); cpRing.rotation.x = -Math.PI / 2; cpRing.scale.set(8, 8, 1); cpRing.position.y = 0.1; checkpoint.add(cpRing);
+checkpoint.add(marker(ringGeo, 0x33ffee, 20, 79));
+scene.add(checkpoint);
+
+const pBodyGeo = new THREE.BoxGeometry(2, 0.7, 4.4);
+function makePolice() {
+  const g = new THREE.Group();
+  const mBody = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 }), mStripe = new THREE.MeshLambertMaterial({ color: 0x1d4fd8 }), mCab = new THREE.MeshLambertMaterial({ color: 0x1a2030 });
+  g.add(box(2, 0.7, 4.4, mBody, 0, 0.75, 0));
+  g.add(box(2.04, 0.3, 4.44, mStripe, 0, 0.7, 0));
+  g.add(box(1.7, 0.6, 2.2, mCab, 0, 1.4, -0.2));
+  addWheels(g);
+  const l1 = new THREE.MeshBasicMaterial({ color: 0xff2020 }), l2 = new THREE.MeshBasicMaterial({ color: 0x2060ff });
+  g.add(box(0.7, 0.25, 0.4, l1, -0.45, 1.85, -0.2)); g.add(box(0.7, 0.25, 0.4, l2, 0.45, 1.85, -0.2));
+  const mk = marker(circGeo, 0xff3344, 7, 80); g.add(mk);
+  g.userData = { mats: [mBody, mStripe, mCab], l1, l2, mk, dead: false, sm: 0 };
+  return g;
+}
+
+/* smoke particles */
+const puffTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+  const gr = x.createRadialGradient(32, 32, 2, 32, 32, 30); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = gr; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+})();
+const puffs = [];
+for (let i = 0; i < 120; i++) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color: 0x8a8a8a, transparent: true, depthWrite: false }));
+  s.visible = false; s.userData.life = 0; scene.add(s); puffs.push(s);
+}
+function emitPuff(x, y, z) {
+  const s = puffs.find(p => !p.visible); if (!s) return;
+  s.position.set(x + (Math.random() - 0.5) * 0.8, y, z + (Math.random() - 0.5) * 0.8); s.userData.life = 1; s.visible = true;
+}
+function updatePuffs(dt) {
+  for (const s of puffs) if (s.visible) {
+    s.userData.life -= dt * 0.9;
+    if (s.userData.life <= 0) { s.visible = false; continue; }
+    const l = s.userData.life; s.position.y += 2.2 * dt; const sc = 1.2 + (1 - l) * 3.5; s.scale.set(sc, sc, 1); s.material.opacity = l * 0.65;
+  }
+}
+
+/* tracers */
+const tracers = [], tracerGeo = new THREE.BoxGeometry(0.12, 0.12, 1);
+function addTracer(a, b) {
+  const m = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true }));
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+  m.position.copy(A).add(B).multiplyScalar(0.5); m.scale.z = A.distanceTo(B); m.lookAt(B);
+  scene.add(m); tracers.push({ m, life: 0.15 });
+}
+function updateTracers(dt) {
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    const t = tracers[i]; t.life -= dt; t.m.material.opacity = clamp(t.life / 0.15, 0, 1);
+    if (t.life <= 0) { scene.remove(t.m); t.m.material.dispose(); tracers.splice(i, 1); }
+  }
+}
+
+/* dispatcher hover marker */
+const hoverMk = marker(ringGeo, 0x44ff66, 9, 86); hoverMk.visible = false; scene.add(hoverMk);
+
+/* ================= game state ================= */
+let role = null, isHost = false, phase = 'title';   // title | lobby | play | end | left
+let city = null, S = null;                           // S = host simulation
+let V = { car: { x: 0, z: 0, th: 0, sp: 0 }, police: new Map() };   // what everyone renders
+const keys = {};
+const pMeshes = new Map();
+let snaps = [], lastSnap = null, lastSnapAt = 0;
+
+/* ================= host simulation ================= */
+function newSim(c) {
+  return { car: { x: c.start.x, z: c.start.z, th: c.start.th, sp: 0, steer: 0 }, police: [], nextId: 1, left: ROUND_TIME, budget: 3, budT: 0, cd: 0, bust: 0, autoT: 10, destroyed: 0, spawned: 0, over: false };
+}
+function stepCar(dt) {
+  const c = S.car, w = keys.KeyW, s = keys.KeyS, hb = keys.Space;
+  if (w) c.sp += (c.sp < 0 ? 40 : 20 * (1 - Math.max(0, c.sp) / (CAR_MAX * 1.1))) * dt;
+  else if (s) c.sp -= (c.sp > 0 ? 36 : 14) * dt;
+  else { const d = Math.min(Math.abs(c.sp), 6 * dt); c.sp -= Math.sign(c.sp) * d; }
+  if (hb) { const d = Math.min(Math.abs(c.sp), 12 * dt); c.sp -= Math.sign(c.sp) * d; }
+  c.sp = clamp(c.sp, -10, CAR_MAX);
+  const tgt = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+  c.steer += (tgt - c.steer) * Math.min(1, 10 * dt);
+  const k = 1 / (1 + Math.abs(c.sp) / 14);
+  c.th += c.steer * 2.4 * k * (hb ? 1.8 : 1) * clamp(c.sp / 4, -1, 1) * dt;
+  c.x += Math.sin(c.th) * c.sp * dt; c.z += Math.cos(c.th) * c.sp * dt;
+  const n = resolve(c, CAR_R);
+  if (n) {
+    const into = -(Math.sin(c.th) * c.sp * n.nx + Math.cos(c.th) * c.sp * n.nz);
+    c.sp *= into > 3 ? 0.3 : 0.985;
+  }
+}
+const activeCount = () => S.police.filter(p => p.st !== 2).length;
+function spawnPolice(x, z, vertical) {
+  const car = S.car;
+  const th = vertical ? (car.z > z ? 0 : Math.PI) : (car.x > x ? Math.PI / 2 : -Math.PI / 2);
+  S.police.push({ id: S.nextId++, x, z, th, sp: 0, hp: 100, st: 0, dead: 0, path: [], rc: 0, stuck: 0, rev: 0, hitcd: 0 });
+  S.spawned++;
+}
+function dispatchSpawn(x, z) {
+  if (!S || S.over || !isFinite(x) || !isFinite(z)) return;
+  if (S.budget < 1 || S.cd > 0 || activeCount() >= 8) return;
+  const q = snapRoad(x, z);
+  if (Math.hypot(q.x - S.car.x, q.z - S.car.z) < 30) return;
+  S.budget -= 1; S.cd = 2; spawnPolice(q.x, q.z, q.vertical);
+}
+function autoSpawn() {
+  if (activeCount() >= 8) return;
+  for (let k = 0; k < 80; k++) {
+    const vert = Math.random() < 0.5, a = R(Math.floor(Math.random() * (GRID + 1))), b = R(0) + Math.random() * (R(GRID) - R(0));
+    const x = vert ? a : b, z = vert ? b : a, d = Math.hypot(x - S.car.x, z - S.car.z);
+    if (d >= 80 && d <= 150) { spawnPolice(x, z, vert); return; }
+  }
+}
+function damagePolice(id, dmg) {
+  const p = S && S.police.find(q => q.id === id); if (!p || p.st === 2) return;
+  p.hp = Math.max(0, p.hp - clamp(dmg, 0, 30));
+  if (p.hp <= 0) { p.st = 2; p.sp = 0; p.dead = 0; S.destroyed++; }
+}
+function stepPolice(p, dt) {
+  if (p.st === 2) { p.sp = 0; p.dead += dt; return; }
+  const car = S.car, d = Math.hypot(car.x - p.x, car.z - p.z);
+  p.rc -= dt;
+  if (p.rc <= 0) { p.rc = 1; p.path = bfs(nearestNode(p.x, p.z), nearestNode(car.x, car.z)); }
+  let tx, tz;
+  if (d < 40 && los(p.x, p.z, car.x, car.z)) {
+    p.st = 1; tx = car.x + Math.sin(car.th) * car.sp * 0.25; tz = car.z + Math.cos(car.th) * car.sp * 0.25;
+  } else {
+    p.st = 0;
+    while (p.path.length > 1 && Math.hypot(NODES[p.path[0]].x - p.x, NODES[p.path[0]].z - p.z) < 6) p.path.shift();
+    const n = p.path[0];
+    let onSeg = false;
+    if (p.path.length > 1) {   // already past node a and driving along road a->b: follow the road line a few metres ahead
+      const a = NODES[p.path[0]], b = NODES[p.path[1]], len = Math.hypot(b.x - a.x, b.z - a.z);
+      const ux = (b.x - a.x) / len, uz = (b.z - a.z) / len;
+      const along = (p.x - a.x) * ux + (p.z - a.z) * uz, lat = Math.abs((p.x - a.x) * uz - (p.z - a.z) * ux);
+      if (along > 0 && lat < 5) { const s = clamp(along + 10, 0, len); tx = a.x + ux * s; tz = a.z + uz * s; onSeg = true; }
+    }
+    if (!onSeg) {
+      if (n === undefined || (p.path.length === 1 && Math.hypot(NODES[n].x - p.x, NODES[n].z - p.z) < 6)) { tx = car.x; tz = car.z; }
+      else { tx = NODES[n].x; tz = NODES[n].z; }
+    }
+  }
+  const want = Math.atan2(tx - p.x, tz - p.z), diff = wrapA(want - p.th);
+  if (p.rev > 0) {
+    p.rev -= dt; p.sp += (-9 - p.sp) * Math.min(1, 4 * dt); p.th -= clamp(diff, -1, 1) * 1.6 * dt;
+  } else {
+    p.th += clamp(diff, -2.6 * dt, 2.6 * dt);
+    const target = POLICE_MAX * (1 - clamp(Math.abs(diff) / 1.3, 0, 1) * 0.65);
+    p.sp += (target - p.sp) * Math.min(1, 2.5 * dt);
+  }
+  p.x += Math.sin(p.th) * p.sp * dt; p.z += Math.cos(p.th) * p.sp * dt;
+  const n = resolve(p, CAR_R);
+  if (n) {
+    const into = -(Math.sin(p.th) * p.sp * n.nx + Math.cos(p.th) * p.sp * n.nz);
+    p.sp *= into > 3 ? 0.4 : 0.98;
+    if (Math.abs(p.sp) < 6) p.stuck += dt;
+  } else p.stuck = Math.max(0, p.stuck - dt);
+  if (p.stuck > 0.8) { p.rev = 0.8; p.stuck = 0; p.rc = 0; }
+  // ram the getaway car
+  if (p.hitcd > 0) p.hitcd -= dt;
+  const cd = Math.hypot(p.x - car.x, p.z - car.z);
+  if (cd < 3.6) {
+    const nx = (p.x - car.x) / (cd || 1), nz = (p.z - car.z) / (cd || 1);
+    p.x += nx * (3.6 - cd); p.z += nz * (3.6 - cd);
+    if (p.hitcd <= 0 && Math.abs(p.sp) > 8) { p.hitcd = 0.5; car.sp *= 0.88; p.sp *= 0.5; }
+  }
+}
+function simStep(dt) {
+  const s = S; if (s.over) return;
+  stepCar(dt);
+  s.left -= dt; s.cd = Math.max(0, s.cd - dt);
+  if (s.budget < 6) { s.budT += dt; if (s.budT >= 8) { s.budT -= 8; s.budget = Math.min(6, s.budget + 1); } } else s.budT = 0;
+  if (!roleConn.dispatcher) { s.autoT -= dt; if (s.autoT <= 0) { s.autoT = 10; autoSpawn(); } }
+  for (const p of s.police) stepPolice(p, dt);
+  s.police = s.police.filter(p => !(p.st === 2 && p.dead > 10));
+  let near = false;
+  for (const p of s.police) if (p.st !== 2 && Math.hypot(p.x - s.car.x, p.z - s.car.z) < 10) { near = true; break; }
+  if (Math.abs(s.car.sp) < 3 && near) s.bust += dt / 3; else s.bust = Math.max(0, s.bust - dt / 2);
+  const cp = city.checkpoint;
+  if (Math.hypot(cp.x - s.car.x, cp.z - s.car.z) < 8) endGame('escaped');
+  else if (s.bust >= 1) endGame('busted');
+  else if (s.left <= 0) { s.left = 0; endGame('time'); }
+}
+function endGame(result) {
+  S.over = true; phase = 'end';
+  const m = { t: 'end', result, time: r2(ROUND_TIME - S.left), destroyed: S.destroyed, spawned: S.spawned };
+  sendSnap(); broadcast(m); showEnd(m);
+}
+function sendSnap() {
+  const s = S, c = s.car;
+  broadcast({ t: 's', c: [r2(c.x), r2(c.z), r2(c.th), r2(c.sp)], p: s.police.map(p => [p.id, r2(p.x), r2(p.z), r2(p.th), p.hp, p.st]), tl: r2(s.left), b: s.budget, cd: r2(s.cd), bu: r2(s.bust) });
+}
+let simLast = performance.now(), simAcc = 0, snapAcc = 0;
+setInterval(() => {
+  const now = performance.now();
+  if (!isHost || phase !== 'play' || !S) { simLast = now; return; }
+  const dt = (now - simLast) / 1000; simLast = now;
+  simAcc += Math.min(dt, 0.25);
+  while (simAcc >= 1 / 60 && phase === 'play') { simStep(1 / 60); simAcc -= 1 / 60; }
+  snapAcc += dt;
+  if (snapAcc >= 0.05) { snapAcc = 0; if (phase === 'play') sendSnap(); }
+}, 8);
+
+/* ================= networking ================= */
+let peer = null, hostConn = null;
+const hostConns = new Set(), roleConn = { gunner: null, dispatcher: null };
+const lobbyInfo = () => ({ gunner: !!roleConn.gunner, dispatcher: !!roleConn.dispatcher });
+function broadcast(m) { for (const k of ['gunner', 'dispatcher']) { const c = roleConn[k]; if (c && c.open) c.send(m); } }
+function broadcastLobby() { const m = { t: 'lobby', roles: lobbyInfo() }; for (const c of hostConns) if (c.open) c.send(m); renderHostLobby(); }
+const sendHost = m => { if (hostConn && hostConn.open) hostConn.send(m); };
+
+function genCode() { const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; let s = ''; for (let i = 0; i < 4; i++) s += L[Math.floor(Math.random() * L.length)]; return s; }
+
+function startHosting() {
+  isHost = true; role = 'driver'; show('sHost'); phase = 'lobby'; renderHostLobby();
+  const attempt = () => {
+    const code = genCode();
+    peer = new Peer('getaway-' + code);
+    peer.on('open', () => { $('hostCode').textContent = code; $('bStart').disabled = false; $('eHost').textContent = ''; });
+    peer.on('error', e => {
+      if (e.type === 'unavailable-id') { try { peer.destroy(); } catch (_) {} attempt(); }
+      else $('eHost').textContent = 'Network error (' + e.type + '). Check your connection and reload.';
+    });
+    peer.on('connection', conn => {
+      conn.on('open', () => {
+        if (phase !== 'lobby') { conn.send({ t: 'denied', reason: 'Game already in progress' }); setTimeout(() => conn.close(), 300); return; }
+        conn._seen = performance.now(); hostConns.add(conn); conn.send({ t: 'lobby', roles: lobbyInfo() });
+      });
+      conn.on('data', m => onHostMsg(conn, m));
+      conn.on('close', () => onClientGone(conn));
+      conn.on('error', () => onClientGone(conn));
+    });
+  };
+  $('bStart').disabled = true; attempt();
+}
+function onClientGone(conn) {
+  hostConns.delete(conn);
+  for (const k of ['gunner', 'dispatcher']) if (roleConn[k] === conn) roleConn[k] = null;
+  if (phase === 'lobby') broadcastLobby();
+}
+setInterval(() => {   // drop clients that stopped sending heartbeats (closed tab, lost network)
+  if (!isHost) return;
+  for (const c of [...hostConns]) if (performance.now() - (c._seen || 0) > 10000) { try { c.close(); } catch (_) {} onClientGone(c); }
+}, 2000);
+setInterval(() => { if (!isHost && hostConn && hostConn.open) hostConn.send({ t: 'p' }); }, 1000);
+function onHostMsg(conn, m) {
+  if (!m || typeof m !== 'object') return;
+  conn._seen = performance.now();
+  if (m.t === 'join') {
+    if ((m.role === 'gunner' || m.role === 'dispatcher') && !roleConn[m.role] && phase === 'lobby' && !Object.values(roleConn).includes(conn)) {
+      roleConn[m.role] = conn; conn.send({ t: 'joined', role: m.role }); broadcastLobby();
+    } else conn.send({ t: 'denied', reason: 'That role is taken', retry: true });
+    return;
+  }
+  if (phase !== 'play' || !S) return;
+  if (m.t === 'hit' && roleConn.gunner === conn) damagePolice(m.id, +m.dmg || 0);
+  else if (m.t === 'shot' && roleConn.gunner === conn && Array.isArray(m.a) && Array.isArray(m.b)) {
+    addTracer(m.a, m.b);
+    const d = roleConn.dispatcher; if (d && d.open) d.send({ t: 'shot', a: m.a, b: m.b });
+  } else if (m.t === 'spawn' && roleConn.dispatcher === conn) dispatchSpawn(+m.x, +m.z);
+}
+function hostStartRound() {
+  const seed = Math.floor(Math.random() * 2 ** 31);
+  broadcast({ t: 'start', seed });
+  startGame(seed);
+}
+
+function joinConnect() {
+  const code = $('joinCode').value.trim().toUpperCase();
+  if (code.length !== 4) { $('eJoin').textContent = 'Enter the 4-letter code'; return; }
+  $('eJoin').textContent = 'Connecting...'; $('bConnect').disabled = true;
+  if (peer) { try { peer.destroy(); } catch (_) {} }
+  peer = new Peer();
+  const fail = msg => { $('eJoin').textContent = msg; $('bConnect').disabled = false; };
+  const timer = setTimeout(() => fail('Could not reach that room. Check the code.'), 12000);
+  peer.on('error', e => { clearTimeout(timer); fail(e.type === 'peer-unavailable' ? 'Room not found. Check the code.' : 'Network error (' + e.type + ')'); });
+  peer.on('open', () => {
+    hostConn = peer.connect('getaway-' + code, { reliable: true, serialization: 'json' });
+    hostConn.on('open', () => { clearTimeout(timer); $('eJoin').textContent = ''; $('rolePick').style.display = 'flex'; $('bConnect').style.display = 'none'; $('joinCode').disabled = true; lastSnapAt = performance.now(); });
+    hostConn.on('data', onClientMsg);
+    hostConn.on('close', hostLeft);
+    hostConn.on('error', hostLeft);
+  });
+}
+function hostLeft() {
+  if (isHost || phase === 'left') return;
+  if (phase === 'title' || phase === 'lobby' && !role) { $('eJoin').textContent = 'Disconnected from host'; return; }
+  phase = 'left'; document.exitPointerLock && document.exitPointerLock(); show('sLeft', true);
+}
+function onClientMsg(m) {
+  if (!m || typeof m !== 'object') return;
+  lastSnapAt = performance.now();
+  switch (m.t) {
+    case 'lobby': renderJoinLobby(m.roles); break;
+    case 'joined': role = m.role; phase = 'lobby'; $('rolePick').style.display = 'none'; $('joinWait').style.display = 'block'; $('joinList').style.display = 'flex'; renderJoinLobby(null); break;
+    case 'denied': $('eJoin').textContent = m.reason || 'Denied'; if (!m.retry) { hostConn.close(); $('bConnect').style.display = ''; $('bConnect').disabled = false; $('rolePick').style.display = 'none'; $('joinCode').disabled = false; } break;
+    case 'start': startGame(m.seed); break;
+    case 's':
+      snaps.push({ t: performance.now(), c: m.c, pm: new Map(m.p.map(a => [a[0], a])) }); if (snaps.length > 12) snaps.shift(); lastSnap = m; break;
+    case 'shot': if (role !== 'gunner') addTracer(m.a, m.b); break;
+    case 'end': phase = 'end'; showEnd(m); break;
+  }
+}
+setInterval(() => { if (!isHost && phase === 'play' && performance.now() - lastSnapAt > 8000) hostLeft(); }, 1000);
+window.addEventListener('beforeunload', () => { try { peer && peer.destroy(); } catch (_) {} });
+
+/* ================= UI ================= */
+function show(id) {
+  for (const el of document.querySelectorAll('.screen')) el.classList.remove('show');
+  if (id) $(id).classList.add('show');
+}
+function plistHtml(info, you) {
+  const row = (name, on, extra) => `<div><span>${name}</span><span class="${on ? 'on' : 'off'}">${on ? 'connected' + (extra || '') : 'waiting...'}</span></div>`;
+  return row('Driver', true, you === 'driver' ? ' (you, host)' : ' (host)') + row('Gunner', info.gunner, you === 'gunner' ? ' (you)' : '') + row('Dispatcher', info.dispatcher, you === 'dispatcher' ? ' (you)' : '');
+}
+function renderHostLobby() { $('hostList').innerHTML = plistHtml(lobbyInfo(), 'driver'); }
+function renderJoinLobby(info) {
+  if (info) renderJoinLobby.info = info; info = renderJoinLobby.info || { gunner: false, dispatcher: false };
+  $('bGunner').disabled = info.gunner; $('bDisp').disabled = info.dispatcher;
+  $('joinList').innerHTML = plistHtml(info, role);
+}
+function showEnd(m) {
+  document.exitPointerLock && document.exitPointerLock();
+  const t = { escaped: 'ESCAPED!', busted: 'BUSTED!', time: 'TIME UP' }[m.result];
+  $('endTitle').textContent = t; $('endTitle').style.color = m.result === 'escaped' ? '#6f6' : '#ff5a5a';
+  $('endStats').innerHTML = `<div><span>Time taken</span><span>${fmtTime(m.time)}</span></div><div><span>Police destroyed</span><span>${m.destroyed}</span></div><div><span>Police spawned</span><span>${m.spawned}</span></div>`;
+  $('bAgain').style.display = isHost ? '' : 'none'; $('endWait').style.display = isHost ? 'none' : '';
+  $('sEnd').classList.add('show');
+}
+$('bHost').onclick = startHosting;
+$('bJoin').onclick = () => { show('sJoin'); phase = 'lobby'; $('joinCode').focus(); };
+$('bHostBack').onclick = $('bJoinBack').onclick = $('bLeft').onclick = () => location.reload();
+$('bStart').onclick = hostStartRound;
+$('bAgain').onclick = hostStartRound;
+$('bConnect').onclick = joinConnect;
+$('joinCode').addEventListener('keydown', e => { if (e.key === 'Enter') joinConnect(); });
+$('bGunner').onclick = () => sendHost({ t: 'join', role: 'gunner' });
+$('bDisp').onclick = () => sendHost({ t: 'join', role: 'dispatcher' });
+
+/* ================= starting a round ================= */
+const gun = { ammo: 12, cd: 0, reload: 0, yaw: 0, pitch: 0, down: false, o: new THREE.Vector3(), d: new THREE.Vector3(0, 0, 1) };
+const camPos = new THREE.Vector3();
+function startGame(seed) {
+  city = genCity(seed); BOXES = city.buildings.concat(city.walls);
+  buildWorld(city);
+  for (const m of pMeshes.values()) scene.remove(m); pMeshes.clear();
+  for (const t of tracers) scene.remove(t.m); tracers.length = 0;
+  snaps = []; lastSnap = null; lastSnapAt = performance.now();
+  V = { car: { x: city.start.x, z: city.start.z, th: city.start.th, sp: 0 }, police: new Map() };
+  if (isHost) { S = newSim(city); simAcc = 0; simLast = performance.now(); }
+  Object.assign(gun, { ammo: 12, cd: 0, reload: 0, yaw: 0, pitch: 0, down: false });
+  camPos.set(city.start.x, 6, city.start.z);
+  phase = 'play';
+  for (const el of document.querySelectorAll('.screen')) el.classList.remove('show');
+  renderer.domElement.style.display = 'block'; $('hud').style.display = 'block';
+  for (const el of document.querySelectorAll('.hg')) el.style.display = 'none';
+  const disp = role === 'dispatcher';
+  scene.fog = disp ? null : FOG;
+  $('hDriver').style.display = role === 'driver' ? 'block' : 'none';
+  $('hGunner').style.display = role === 'gunner' ? 'block' : 'none';
+  $('hDisp').style.display = disp ? 'block' : 'none';
+  $('hRole').textContent = { driver: 'DRIVER', gunner: 'GUNNER', dispatcher: 'DISPATCHER' }[role];
+  $('hHint').textContent = { driver: 'W/S accelerate/brake - A/D steer - Space handbrake - reach the glowing column', gunner: 'Mouse look - Left click shoot - R reload', dispatcher: 'Click or tap a road to spawn a police car' }[role];
+  cam = disp ? ortho : persp; hoverMk.visible = false; resize();
+}
+
+/* ================= view state & scene sync ================= */
+function updateView() {
+  if (isHost) {
+    if (!S) return;
+    V.car = S.car; V.police = new Map(S.police.map(p => [p.id, p])); return;
+  }
+  if (!snaps.length) return;
+  const tt = performance.now() - 100;
+  let a = snaps[0], b = snaps[0];
+  for (let i = snaps.length - 1; i >= 0; i--) if (snaps[i].t <= tt) { a = snaps[i]; b = snaps[Math.min(i + 1, snaps.length - 1)]; break; }
+  const k = a === b ? (tt >= a.t ? 1 : 0) : clamp((tt - a.t) / (b.t - a.t), 0, 1);
+  V.car = { x: lerp(a.c[0], b.c[0], k), z: lerp(a.c[1], b.c[1], k), th: lerpA(a.c[2], b.c[2], k), sp: lerp(a.c[3], b.c[3], k) };
+  const pol = new Map();
+  for (const [id, q] of b.pm) {
+    const o = a.pm.get(id);
+    pol.set(id, o ? { id, x: lerp(o[1], q[1], k), z: lerp(o[2], q[2], k), th: lerpA(o[3], q[3], k), hp: q[4], st: q[5] } : { id, x: q[1], z: q[2], th: q[3], hp: q[4], st: q[5] });
+  }
+  V.police = pol;
+}
+let tAnim = 0;
+function syncScene(dt) {
+  carMesh.position.set(V.car.x, 0, V.car.z); carMesh.rotation.y = V.car.th;
+  for (const [id, p] of V.police) {
+    let m = pMeshes.get(id);
+    if (!m) { m = makePolice(); scene.add(m); pMeshes.set(id, m); }
+    m.position.set(p.x, 0, p.z); m.rotation.y = p.th;
+    const u = m.userData, dead = p.st === 2;
+    if (dead !== u.dead) {
+      u.dead = dead;
+      if (dead) { for (const mt of u.mats) mt.color.set(0x0a0a0a); u.l1.color.set(0x111111); u.l2.color.set(0x111111); u.mk.material.color.set(0x555555); }
+    }
+    if (!dead) {
+      const ph = Math.floor(tAnim * 8) % 2;
+      u.l1.color.set(ph ? 0xff2020 : 0x330808); u.l2.color.set(ph ? 0x081033 : 0x2060ff);
+      if (p.hp <= 50) { u.sm -= dt; if (u.sm <= 0) { u.sm = 0.07; emitPuff(p.x + Math.sin(p.th) * 1.8, 1.5, p.z + Math.cos(p.th) * 1.8); } }
+    }
+  }
+  for (const [id, m] of pMeshes) if (!V.police.has(id)) {
+    scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo) o.geometry.dispose(); }); pMeshes.delete(id);
+  }
+  cpCol.material.opacity = 0.3 + 0.15 * Math.sin(tAnim * 3); cpRing.rotation.z = tAnim;
+  carMarker.scale.setScalar(10 + Math.sin(tAnim * 6) * 1.5);
+  updatePuffs(dt); updateTracers(dt);
+}
+
+/* ================= cameras per role ================= */
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight; renderer.setSize(w, h);
+  persp.aspect = w / h; persp.updateProjectionMatrix();
+  const half = SIZE / 2 + 12, asp = w / h; let hw, hh;
+  if (asp >= 1) { hh = half; hw = half * asp; } else { hw = half; hh = half / asp; }
+  ortho.left = -hw; ortho.right = hw; ortho.top = hh; ortho.bottom = -hh;
+  ortho.position.set(SIZE / 2, 300, SIZE / 2); ortho.up.set(0, 0, -1); ortho.lookAt(SIZE / 2, 0, SIZE / 2); ortho.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+function updateCamera(dt) {
+  const c = V.car, sx = Math.sin(c.th), cz = Math.cos(c.th);
+  if (role === 'driver') {
+    const tx = c.x - sx * 11, tz = c.z - cz * 11, k = 1 - Math.exp(-6 * dt);
+    camPos.x = lerp(camPos.x, tx, k); camPos.y = lerp(camPos.y, 5.5, k); camPos.z = lerp(camPos.z, tz, k);
+    persp.position.copy(camPos); persp.lookAt(c.x + sx * 6, 1.5, c.z + cz * 6);
+  } else if (role === 'gunner') {
+    gun.o.set(c.x - sx * 0.3, 2.3, c.z - cz * 0.3);
+    const psi = c.th + gun.yaw, cp = Math.cos(gun.pitch);
+    gun.d.set(Math.sin(psi) * cp, Math.sin(gun.pitch), Math.cos(psi) * cp);
+    persp.position.copy(gun.o); persp.lookAt(gun.o.x + gun.d.x, gun.o.y + gun.d.y, gun.o.z + gun.d.z);
+  }
+}
+
+/* ================= gunner ================= */
+document.addEventListener('mousemove', e => {
+  if (role !== 'gunner' || document.pointerLockElement !== renderer.domElement) return;
+  gun.yaw -= e.movementX * 0.0022; gun.pitch = clamp(gun.pitch - e.movementY * 0.0022, -1.45, 1.45);
+});
+renderer.domElement.addEventListener('mousedown', e => {
+  if (role !== 'gunner' || phase !== 'play' || e.button !== 0) return;
+  if (document.pointerLockElement !== renderer.domElement) { renderer.domElement.requestPointerLock && renderer.domElement.requestPointerLock(); return; }
+  gun.down = true;
+});
+window.addEventListener('mouseup', e => { if (e.button === 0) gun.down = false; });
+function startReload() { if (gun.reload <= 0 && gun.ammo < 12) gun.reload = 2; }
+function fire() {
+  gun.cd = 0.2; gun.ammo--;
+  const o = gun.o, d = gun.d;
+  let tB = Infinity;
+  for (const b of BOXES) tB = Math.min(tB, rayBox(o.x, o.y, o.z, d.x, d.y, d.z, [b.x0, 0, b.z0], [b.x1, b.h, b.z1]));
+  let tP = Infinity, hitId = null;
+  for (const [id, p] of V.police) {
+    if (p.st === 2) continue;
+    const c = Math.cos(p.th), s = Math.sin(p.th);
+    const lx = o.x - p.x, lz = o.z - p.z;
+    const ox = lx * c - lz * s, oz = lx * s + lz * c, dx = d.x * c - d.z * s, dz = d.x * s + d.z * c;
+    const t = rayBox(ox, o.y, oz, dx, d.y, dz, [-1.05, 0, -2.25], [1.05, 1.95, 2.25]);
+    if (t < tP) { tP = t; hitId = id; }
+  }
+  const t = Math.min(tB, tP, 400), end = [o.x + d.x * t, o.y + d.y * t, o.z + d.z * t];
+  const start = [o.x + d.x * 1.2, o.y - 0.25, o.z + d.z * 1.2];
+  addTracer(start, end); sendHost({ t: 'shot', a: start, b: end });
+  if (hitId !== null && tP < tB && tP <= 400) sendHost({ t: 'hit', id: hitId, dmg: 25 });
+}
+function updateGun(dt) {
+  if (role !== 'gunner' || phase !== 'play') return;
+  gun.cd = Math.max(0, gun.cd - dt);
+  if (gun.reload > 0) { gun.reload -= dt; if (gun.reload <= 0) { gun.reload = 0; gun.ammo = 12; } }
+  if (gun.down && gun.cd <= 0 && gun.reload <= 0) { if (gun.ammo > 0) fire(); else startReload(); }
+}
+
+/* ================= dispatcher ================= */
+const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+function dispPoint(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), ortho);
+  if (!ray.ray.intersectPlane(plane, hit)) return null;
+  return snapRoad(hit.x, hit.z);
+}
+function spawnValid(q) {
+  const h = hud(); if (!h) return false;
+  const act = [...V.police.values()].filter(p => p.st !== 2).length;
+  return h.budget >= 1 && h.cd <= 0 && act < 8 && Math.hypot(q.x - V.car.x, q.z - V.car.z) >= 30;
+}
+function dispHover(e) {
+  if (role !== 'dispatcher' || phase !== 'play') return null;
+  const q = dispPoint(e); if (!q) return null;
+  hoverMk.visible = true; hoverMk.position.set(q.x, 86, q.z);
+  hoverMk.material.color.set(spawnValid(q) ? 0x44ff66 : 0xff2a2a);
+  return q;
+}
+renderer.domElement.addEventListener('pointermove', dispHover);
+renderer.domElement.addEventListener('pointerdown', e => {
+  const q = dispHover(e); if (!q) return;
+  if (spawnValid(q)) sendHost({ t: 'spawn', x: q.x, z: q.z });
+});
+
+/* ================= HUD ================= */
+function hud() {
+  if (isHost) return S ? { left: S.left, budget: S.budget, cd: S.cd, bust: S.bust } : null;
+  return lastSnap ? { left: lastSnap.tl, budget: lastSnap.b, cd: lastSnap.cd, bust: lastSnap.bu } : null;
+}
+const cache = {};
+function setText(id, v) { if (cache[id] !== v) { cache[id] = v; $(id).textContent = v; } }
+function updateHud() {
+  const h = hud(); if (!h) return;
+  setText('hTime', fmtTime(h.left));
+  $('bust').style.display = h.bust > 0.01 ? 'block' : 'none'; $('bustFill').style.width = Math.min(100, h.bust * 100) + '%';
+  if (role === 'driver') {
+    const cp = city.checkpoint, dx = cp.x - V.car.x, dz = cp.z - V.car.z;
+    setText('speed', Math.round(Math.abs(V.car.sp) * 3.6) + ' km/h'); setText('dist', Math.round(Math.hypot(dx, dz)) + ' m to checkpoint');
+    $('arrow').style.transform = `rotate(${-(Math.atan2(dx, dz) - V.car.th)}rad)`;
+  } else if (role === 'gunner') {
+    setText('ammo', gun.reload > 0 ? 'RELOADING' : gun.ammo + ' / 12');
+    $('aimHint').style.display = document.pointerLockElement === renderer.domElement ? 'none' : 'block';
+  } else {
+    const act = [...V.police.values()].filter(p => p.st !== 2).length;
+    setText('dBud', 'Budget ' + Math.floor(h.budget) + '/6'); setText('dCd', h.cd > 0 ? 'Cooldown ' + h.cd.toFixed(1) + 's' : 'Ready'); setText('dPol', 'Police ' + act + '/8');
+    $('dCd').className = h.cd > 0 ? 'warn' : 'stat'; $('dBud').className = h.budget < 1 ? 'warn' : 'stat';
+  }
+}
+
+/* ================= input ================= */
+window.addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT') return;
+  keys[e.code] = true;
+  if (phase === 'play' && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (e.code === 'KeyR' && role === 'gunner' && phase === 'play') startReload();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; gun.down = false; });
+
+/* ================= main loop ================= */
+let lastF = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - lastF) / 1000); lastF = now; tAnim += dt;
+  if (phase === 'play' || phase === 'end') {
+    updateView(); syncScene(dt); updateCamera(dt); updateGun(dt); updateHud();
+    renderer.render(scene, cam);
+  }
+}
+requestAnimationFrame(frame);
+
+window.__dbg = { frame, renderer, get S() { return S; }, get V() { return V; }, keys, gun, get phase() { return phase; }, get role() { return role; }, fire, get city() { return city; } };
+</script>
+</body>
+</html>
