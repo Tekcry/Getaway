@@ -23,6 +23,7 @@ input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-tra
 .plist{display:flex;flex-direction:column;gap:6px;min-width:300px;text-align:left;background:#0006;padding:14px 20px;border-radius:10px}
 .plist div{display:flex;justify-content:space-between;gap:30px}
 .on{color:#6f6}.off{color:#888}
+.plist .note{color:#ffd27a;font-size:14px;margin-top:4px}
 .err{color:#ff6b6b;min-height:22px}
 .row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
 #hud{position:fixed;inset:0;pointer-events:none;display:none;z-index:5}
@@ -45,6 +46,8 @@ input{font:inherit;font-size:32px;text-align:center;letter-spacing:10px;text-tra
 #cross:before{left:14px;top:0;width:2px;height:30px}
 #cross:after{top:14px;left:0;height:2px;width:30px}
 #cross i{position:absolute;inset:11px;border-radius:50%;border:2px solid #ff4040}
+#cross.hit:before,#cross.hit:after{background:#ff3030}
+#cross.hit i{border-color:#fff;inset:8px}
 #ammo{position:absolute;bottom:34px;right:30px;font-size:44px;font-weight:800;text-shadow:0 2px 6px #000}
 #aimHint{position:absolute;top:60%;left:50%;transform:translateX(-50%);font-size:22px;background:#000a;padding:8px 18px;border-radius:8px}
 #hDisp{position:absolute;inset:0}
@@ -133,10 +136,10 @@ const GRID = 10, BLOCK = 40, ROAD = 14, PITCH = BLOCK + ROAD, SIZE = GRID * PITC
 const R = i => ROAD / 2 + i * PITCH;            // centre of road line i (0..GRID)
 const CAR_MAX = 30, ROUND_TIME = 180, CAR_R = 1.8;
 const VEH_R = 2.1, LANE = 3.5, CIV_N = 16, CIV_MAX = 12, CIV_MODELS = 4;   // vehicle-vs-vehicle radius, right-hand lane offset, traffic
-const PTYPES = [   // police types: hp, top speed as a fraction of the getaway car, dispatcher cost, ram speed multiplier, auto-spawn weight
-  { name: 'Cruiser', hp: 100, spd: 0.9, cost: 1, ram: 0.88, w: 6 },
-  { name: 'Interceptor', hp: 60, spd: 1.0, cost: 2, ram: 0.88, w: 3 },
-  { name: 'Heavy SUV', hp: 200, spd: 0.75, cost: 3, ram: 0.76, w: 1 }
+const PTYPES = [   // police types: hp, top speed as a fraction of the getaway car, dispatcher cost, ram speed multiplier
+  { name: 'Cruiser', hp: 100, spd: 0.9, cost: 1, ram: 0.88 },
+  { name: 'Interceptor', hp: 60, spd: 1.0, cost: 2, ram: 0.88 },
+  { name: 'Heavy SUV', hp: 200, spd: 0.75, cost: 3, ram: 0.76 }
 ];
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -384,8 +387,18 @@ function makePolice(k) {
   const l1 = new THREE.MeshBasicMaterial({ color: 0xff2020 }), l2 = new THREE.MeshBasicMaterial({ color: 0x2060ff });
   g.add(box(0.7, 0.25, 0.4, l1, -0.45, L.roof, -0.2)); g.add(box(0.7, 0.25, 0.4, l2, 0.45, L.roof, -0.2));
   const mk = marker(circGeo, 0xff3344, L.mk, 80); g.add(mk);
-  g.userData = { mats, l1, l2, mk, dead: false, sm: 0, k };
+  g.userData = { mats, l1, l2, mk, dead: false, sm: 0, k, roof: L.roof };
   return g;
+}
+const hbBgGeo = new THREE.PlaneGeometry(2.3, 0.34), hbFillGeo = new THREE.PlaneGeometry(2, 0.2).translate(1, 0, 0), hbBgMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+function makeHpBar() {   // floating health bar for a damaged police car (kept in the scene root so it can face the camera)
+  const g = new THREE.Group(), fill = new THREE.Mesh(hbFillGeo, new THREE.MeshBasicMaterial({ color: 0x44dd44 }));
+  g.add(new THREE.Mesh(hbBgGeo, hbBgMat)); fill.position.set(-1, 0, 0.01); g.add(fill);
+  g.userData.fill = fill; g.visible = false; return g;
+}
+function removePolice(m) {
+  scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo && !o.userData.shared) o.geometry.dispose(); });
+  if (m.userData.hb) { scene.remove(m.userData.hb); m.userData.hb.userData.fill.material.dispose(); }
 }
 const CIV_COLS = [0x3a6fd8, 0xe8c020, 0x3f9a4a, 0xb0b4bc];
 function makeCiv(m) {
@@ -453,7 +466,7 @@ let snaps = [], lastSnap = null, lastSnapAt = 0;
 
 /* ================= host simulation ================= */
 function newSim(c) {
-  return { car: { x: c.start.x, z: c.start.z, th: c.start.th, sp: 0, steer: 0 }, police: [], traffic: [], nextId: 1, left: ROUND_TIME, budget: 3, budT: 0, cd: 0, bust: 0, autoT: 10, destroyed: 0, spawned: 0, over: false };
+  return { car: { x: c.start.x, z: c.start.z, th: c.start.th, sp: 0, steer: 0 }, police: [], traffic: [], nextId: 1, left: ROUND_TIME, budget: 3, budT: 0, cd: 0, bust: 0, autoT: 6, destroyed: 0, spawned: 0, over: false };
 }
 const allVehicles = () => [S.car, ...S.police, ...S.traffic];
 function stepCar(dt) {
@@ -488,18 +501,37 @@ function dispatchSpawn(x, z, k) {
   if (Math.hypot(q.x - S.car.x, q.z - S.car.z) < 30) return;
   S.budget -= PTYPES[k].cost; S.cd = 2; spawnPolice(q.x, q.z, q.vertical, k);
 }
-function randomType() {   // weighted towards Cruiser
-  let r = Math.random() * PTYPES.reduce((a, t) => a + t.w, 0);
-  for (let k = 0; k < PTYPES.length; k++) { r -= PTYPES[k].w; if (r < 0) return k; }
-  return 0;
+/* AI Dispatcher (no human Dispatcher connected): same budget, cooldown and police limit as a human,
+   spawns ahead on the getaway car's route to the checkpoint and gets more aggressive as time runs out */
+function aiDispatch(dt) {
+  const s = S; s.autoT -= dt; if (s.autoT > 0) return;
+  const p = 1 - s.left / ROUND_TIME;   // 0 at the start, 1 when time is up
+  s.autoT = 3.5 - 2 * p + Math.random();
+  if (s.cd > 0 || activeCount() >= 8) return;
+  let r = Math.random() * (10 + 6 * p), k = (r -= 6) < 0 ? 0 : (r -= 3 + 3 * p) < 0 ? 1 : 2;   // heavier types more likely later
+  if (s.budget < PTYPES[k].cost) { if (s.budget >= 1 && Math.random() < 0.25 + 0.5 * p) k = 0; else return; }   // save up, or settle for a Cruiser
+  const q = aiSpawnPoint() || ringPoint(); if (!q) return;
+  s.budget -= PTYPES[k].cost; s.cd = 2; spawnPolice(q.x, q.z, q.vertical, k);
 }
-function autoSpawn() {
-  if (activeCount() >= 8) return;
+function aiSpawnPoint() {   // a free intersection 60-140 m from the car on its route to the checkpoint, sometimes one road off it to flank
+  const car = S.car, path = bfs(nearestNode(car.x, car.z), nearestNode(city.checkpoint.x, city.checkpoint.z));
+  const cands = path.filter(n => { const d = Math.hypot(NODES[n].x - car.x, NODES[n].z - car.z); return d >= 60 && d <= 140; });
+  for (let tries = 0; tries < 6 && cands.length; tries++) {
+    let n = cands[Math.floor(Math.random() * cands.length)];
+    if (Math.random() < 0.35) n = ADJ[n][Math.floor(Math.random() * ADJ[n].length)];
+    const x = NODES[n].x, z = NODES[n].z;
+    if (Math.hypot(x - car.x, z - car.z) < 40 || allVehicles().some(v => Math.hypot(v.x - x, v.z - z) < 6)) continue;
+    return { x, z, vertical: Math.abs(car.z - z) >= Math.abs(car.x - x) };
+  }
+  return null;
+}
+function ringPoint() {   // fallback: any road point 80-150 m away
   for (let k = 0; k < 80; k++) {
     const vert = Math.random() < 0.5, a = R(Math.floor(Math.random() * (GRID + 1))), b = R(0) + Math.random() * (R(GRID) - R(0));
     const x = vert ? a : b, z = vert ? b : a, d = Math.hypot(x - S.car.x, z - S.car.z);
-    if (d >= 80 && d <= 150) { spawnPolice(x, z, vert, randomType()); return; }
+    if (d >= 80 && d <= 150) return { x, z, vertical: vert };
   }
+  return null;
 }
 function damagePolice(id, dmg) {
   const p = S && S.police.find(q => q.id === id); if (!p || p.st === 2) return;
@@ -621,7 +653,7 @@ function simStep(dt) {
   stepCar(dt);
   s.left -= dt; s.cd = Math.max(0, s.cd - dt);
   if (s.budget < 6) { s.budT += dt; if (s.budT >= 8) { s.budT -= 8; s.budget = Math.min(6, s.budget + 1); } } else s.budT = 0;
-  if (!roleConn.dispatcher) { s.autoT -= dt; if (s.autoT <= 0) { s.autoT = 10; autoSpawn(); } }
+  if (!roleConn.dispatcher) aiDispatch(dt);
   for (const p of s.police) stepPolice(p, dt);
   for (const t of s.traffic) stepCiv(t, dt);
   separate();
@@ -769,7 +801,10 @@ function show(id) {
 }
 function plistHtml(info, you) {
   const row = (name, on, extra) => `<div><span>${name}</span><span class="${on ? 'on' : 'off'}">${on ? 'connected' + (extra || '') : 'waiting...'}</span></div>`;
-  return row('Driver', true, you === 'driver' ? ' (you, host)' : ' (host)') + row('Gunner', info.gunner, you === 'gunner' ? ' (you)' : '') + row('Dispatcher', info.dispatcher, you === 'dispatcher' ? ' (you)' : '');
+  const note = t => `<div class="note">${t}</div>`;
+  return row('Driver', true, you === 'driver' ? ' (you, host)' : ' (host)') + row('Gunner', info.gunner, you === 'gunner' ? ' (you)' : '') + row('Dispatcher', info.dispatcher, you === 'dispatcher' ? ' (you)' : '')
+    + (info.dispatcher ? '' : note('No Dispatcher: the computer will send the police.'))
+    + (info.gunner ? '' : note('No Gunner: nobody can shoot the police down.'));
 }
 function renderHostLobby() { $('hostList').innerHTML = plistHtml(lobbyInfo(), 'driver'); }
 function renderJoinLobby(info) {
@@ -796,12 +831,12 @@ $('bGunner').onclick = () => sendHost({ t: 'join', role: 'gunner' });
 $('bDisp').onclick = () => sendHost({ t: 'join', role: 'dispatcher' });
 
 /* ================= starting a round ================= */
-const gun = { ammo: 12, cd: 0, reload: 0, yaw: 0, pitch: 0, down: false, o: new THREE.Vector3(), d: new THREE.Vector3(0, 0, 1) };
+const gun = { ammo: 12, cd: 0, reload: 0, yaw: 0, pitch: 0, down: false, flash: 0, o: new THREE.Vector3(), d: new THREE.Vector3(0, 0, 1) };
 const camPos = new THREE.Vector3();
 function startGame(seed) {
   city = genCity(seed); BOXES = city.buildings.concat(city.walls);
   buildWorld(city);
-  for (const m of pMeshes.values()) scene.remove(m); pMeshes.clear();
+  for (const m of pMeshes.values()) removePolice(m); pMeshes.clear();
   for (const t of tracers) scene.remove(t.m); tracers.length = 0;
   snaps = []; lastSnap = null; lastSnapAt = performance.now();
   V = { car: { x: city.start.x, z: city.start.z, th: city.start.th, sp: 0 }, police: new Map(), traffic: [] };
@@ -862,10 +897,17 @@ function syncScene(dt) {
       u.l1.color.set(ph ? 0xff2020 : 0x330808); u.l2.color.set(ph ? 0x081033 : 0x2060ff);
       if (p.hp <= PTYPES[p.k].hp / 2) { u.sm -= dt; if (u.sm <= 0) { u.sm = 0.07; emitPuff(p.x + Math.sin(p.th) * 1.8, 1.5, p.z + Math.cos(p.th) * 1.8); } }
     }
+    const frac = p.hp / PTYPES[p.k].hp, showHb = !dead && frac < 1 && role !== 'dispatcher';
+    if (showHb && !u.hb) { u.hb = makeHpBar(); scene.add(u.hb); }
+    if (u.hb) {
+      u.hb.visible = showHb;
+      if (showHb) {
+        u.hb.position.set(p.x, u.roof + 0.9, p.z); u.hb.quaternion.copy(cam.quaternion);
+        const f = u.hb.userData.fill; f.scale.x = Math.max(0.001, frac); f.material.color.set(frac > 0.5 ? 0x44dd44 : frac > 0.25 ? 0xffaa22 : 0xff3030);
+      }
+    }
   }
-  for (const [id, m] of pMeshes) if (!V.police.has(id)) {
-    scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo && !o.userData.shared) o.geometry.dispose(); }); pMeshes.delete(id);
-  }
+  for (const [id, m] of pMeshes) if (!V.police.has(id)) { removePolice(m); pMeshes.delete(id); }
   V.traffic.forEach((t, i) => {
     let m = tMeshes[i];
     if (!m || m.userData.m !== t.m) { if (m) scene.remove(m); m = tMeshes[i] = makeCiv(t.m); scene.add(m); }
@@ -934,11 +976,11 @@ function fire() {
   const t = Math.min(tB, tP, 400), end = [o.x + d.x * t, o.y + d.y * t, o.z + d.z * t];
   const start = [o.x + d.x * 1.2, o.y - 0.25, o.z + d.z * 1.2];
   addTracer(start, end); sendHost({ t: 'shot', a: start, b: end });
-  if (hitId !== null && tP < tB && tP <= 400) sendHost({ t: 'hit', id: hitId, dmg: 25 });
+  if (hitId !== null && tP < tB && tP <= 400) { sendHost({ t: 'hit', id: hitId, dmg: 25 }); gun.flash = 0.18; }
 }
 function updateGun(dt) {
   if (role !== 'gunner' || phase !== 'play') return;
-  gun.cd = Math.max(0, gun.cd - dt);
+  gun.cd = Math.max(0, gun.cd - dt); gun.flash = Math.max(0, gun.flash - dt);
   if (gun.reload > 0) { gun.reload -= dt; if (gun.reload <= 0) { gun.reload = 0; gun.ammo = 12; } }
   if (gun.down && gun.cd <= 0 && gun.reload <= 0) { if (gun.ammo > 0) fire(); else startReload(); }
 }
@@ -1004,6 +1046,7 @@ function updateHud() {
     drawRadar();
   } else if (role === 'gunner') {
     setText('ammo', gun.reload > 0 ? 'RELOADING' : gun.ammo + ' / 12');
+    $('cross').classList.toggle('hit', gun.flash > 0);
     $('aimHint').style.display = document.pointerLockElement === renderer.domElement ? 'none' : 'block';
   } else {
     const act = [...V.police.values()].filter(p => p.st !== 2).length;
