@@ -180,7 +180,7 @@ import * as THREE from 'three';
 const GRID = 10, BLOCK = 40, ROAD = 14, PITCH = BLOCK + ROAD, SIZE = GRID * PITCH + ROAD;
 const R = i => ROAD / 2 + i * PITCH;            // centre of road line i (0..GRID)
 const CAR_MAX = 30, ROUND_TIME = 180, CAR_R = 1.8;
-const VEH_R = 2.1, LANE = 3.5, CIV_N = 16, CIV_MAX = 12, CIV_MODELS = 4;   // vehicle-vs-vehicle radius, right-hand lane offset, traffic
+const VEH_R = 2.1, LANE = 3.5, CIV_N = 16, CIV_MAX = 12, CIV_MODELS = 5;   // vehicle-vs-vehicle radius, right-hand lane offset, traffic
 const PTYPES = [   // police types: hp, top speed as a fraction of the getaway car, dispatcher cost, ram speed multiplier
   { name: 'Cruiser', hp: 100, spd: 0.9, cost: 1, ram: 0.88 },
   { name: 'Interceptor', hp: 60, spd: 1.0, cost: 2, ram: 0.88 },
@@ -427,20 +427,28 @@ function fitModel(root) {   // rotate to face +Z (front wheels ahead of back whe
   inner.scale.setScalar(Math.min(4.4 / sz.z, 2.2 / sz.x));
   bb = new THREE.Box3().setFromObject(outer); const c = bb.getCenter(new THREE.Vector3());
   inner.position.set(-c.x, -bb.min.y, -c.z);
-  outer.userData.h = bb.max.y - bb.min.y;
+  const size = bb.getSize(new THREE.Vector3());
+  outer.updateMatrixWorld(true);
+  let wheelR = 0.35;
+  root.traverse(o => { if (/^wheel-front/.test(o.name)) wheelR = new THREE.Box3().setFromObject(o).getSize(w).y / 2; });
+  const fl = Math.hypot(f.x - b.x, f.z - b.z) || 1;
+  // h: height; dims: final width/height/length; wheelR: wheel radius (m); fwd: forward direction in the model's own space (for wheel axles)
+  Object.assign(outer.userData, { h: size.y, dims: [size.x, size.y, size.z], wheelR, fwd: nf && nb ? [(f.x - b.x) / fl, (f.z - b.z) / fl] : [0, 1] });
   return outer;
 }
-function recolourRedToBlue(model) {   // copy the shared palette texture and swap red/blue in its strongly red swatches
+// copy a model's palette texture and repaint the pixels that match `test` with `paint` (paint jobs without new assets)
+function recolour(model, test, paint) {
   let tex = null; model.traverse(o => { if (o.isMesh && o.material.map) tex = o.material.map; });
   if (!tex || !tex.image) return;
   const c = document.createElement('canvas'); c.width = tex.image.width; c.height = tex.image.height;
   const x = c.getContext('2d'); x.drawImage(tex.image, 0, 0);
   const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
-  for (let i = 0; i < p.length; i += 4) if (p[i] > p[i + 1] + 60 && p[i] > p[i + 2] + 60) { const r = p[i]; p[i] = p[i + 2]; p[i + 2] = r; }
+  for (let i = 0; i < p.length; i += 4) if (test(p[i], p[i + 1], p[i + 2])) { const q = paint(p[i], p[i + 1], p[i + 2]); p[i] = q[0]; p[i + 1] = q[1]; p[i + 2] = q[2]; }
   x.putImageData(d, 0, 0);
   const t2 = tex.clone(); t2.image = c; t2.needsUpdate = true;
   model.traverse(o => { if (o.isMesh && o.material.map === tex) { o.material = o.material.clone(); o.material.map = t2; } });
 }
+const isRed = (r, g, b) => r > g + 60 && r > b + 60, isGreen = (r, g, b) => g > r + 40 && g > b + 40;
 async function loadCars() {
   try {
     const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
@@ -448,14 +456,83 @@ async function loadCars() {
     await Promise.all(Object.entries(CAR_FILES).map(async ([k, f]) => { out[k] = fitModel((await loader.loadAsync('assets/cars/' + f + '.glb')).scene); }));
     out.interceptor.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setHex(0x3a3c44); } });   // repaint dark
     out.heavy.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.setHex(0x7a88a6); } });   // darker, bulkier SUV (looks only)
-    out.heavy.scale.y = 1.12; out.heavy.userData.h *= 1.12;
-    recolourRedToBlue(out.civ0);   // the traffic sedan is red like the getaway car: make it blue
+    out.heavy.scale.y = 1.12; out.heavy.userData.h *= 1.12; out.heavy.userData.dims[1] *= 1.12;
+    // paint jobs: purple getaway car (unlike any traffic), and five traffic variants from three models
+    recolour(out.car, isRed, (r, g, b) => [r * 0.62, r * 0.16, r * 0.92]);
+    out.civ3 = out.civ0.clone(true); out.civ4 = out.civ2.clone(true);
+    recolour(out.civ0, isRed, (r, g, b) => [b, g, r]);   // blue sedan
+    recolour(out.civ3, isRed, (r, g, b) => [r * 0.82, r * 0.82, r * 0.86]);   // silver sedan
+    recolour(out.civ4, isGreen, (r, g, b) => [g, g * 0.5, b * 0.3]);   // orange hatchback
+    // glossy paint with reflections from a neutral studio environment
+    try {
+      const { RoomEnvironment } = await import('three/addons/environments/RoomEnvironment.js');
+      scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+    } catch (_) {}
+    for (const [k, m] of Object.entries(out)) m.traverse(o => {
+      if (!o.isMesh || !o.material.isMeshStandardMaterial) return;
+      o.material.roughness = k === 'car' ? 0.3 : 0.45; o.material.metalness = k === 'car' ? 0.35 : 0.12; o.material.envMapIntensity = 0.7;
+    });
     CARS = out;
   } catch (e) { console.warn('Vehicle models failed to load, using box cars', e); CARS = null; }
 }
+
+/* moving parts and lamps for a loaded model: spinning wheels, steering front wheels, body lean, head/brake lights */
+const WHEEL_RE = /^wheel-(front|back)-(left|right)$/;
+const lampGeo = new THREE.PlaneGeometry(0.34, 0.15), headMat = new THREE.MeshBasicMaterial({ color: 0xfff2cc });
+let glowMats = null;
+function glowMat(col, op) { return new THREE.SpriteMaterial({ map: puffTex, color: col, transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending }); }
+function glows() { return glowMats || (glowMats = { head: glowMat(0xffe2a8, 0.45), brake: glowMat(0xff2020, 0.8), red: glowMat(0xff2020, 0.9), blue: glowMat(0x3070ff, 0.9) }); }
+function rigModel(model) {
+  glows();
+  const ud = model.userData, [fx, fz] = ud.fwd, [w, h, l] = ud.dims, wheels = [];
+  model.traverse(o => { const r = WHEEL_RE.exec(o.name); if (r) wheels.push({ o, front: r[1] === 'front', base: o.quaternion.clone() }); });
+  const lamps = new THREE.Group(), tail = new THREE.MeshBasicMaterial({ color: 0x4a0808 }), brakeGlow = [], y = h * 0.4;
+  for (const sx of [-1, 1]) {
+    const hl = new THREE.Mesh(lampGeo, headMat); hl.position.set(sx * (w / 2 - 0.42), y, l / 2 + 0.03); lamps.add(hl);
+    const hg = new THREE.Sprite(glowMats.head); hg.position.set(sx * (w / 2 - 0.42), y, l / 2 + 0.25); hg.scale.setScalar(1.1); lamps.add(hg);
+    const tl = new THREE.Mesh(lampGeo, tail); tl.position.set(sx * (w / 2 - 0.42), y, -l / 2 - 0.03); tl.rotation.y = Math.PI; lamps.add(tl);
+    const bg = new THREE.Sprite(glowMats.brake); bg.position.set(sx * (w / 2 - 0.42), y, -l / 2 - 0.25); bg.scale.setScalar(1.2); bg.visible = false; lamps.add(bg); brakeGlow.push(bg);
+  }
+  model.add(lamps);
+  return { model, wheels, lamps, tail, brakeGlow, axle: new THREE.Vector3(fz, 0, -fx), r: ud.wheelR, spin: 0, steer: 0, lean: 0, pitch: 0, v: 0, acc: 0, bt: 0, px: null, pz: 0, pth: 0 };
+}
+const _qa = new THREE.Quaternion(), _qs = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0);
+function animateRig(rg, x, z, th, dt) {
+  if (rg.px === null || dt <= 0 || Math.hypot(x - rg.px, z - rg.pz) > 12) { rg.px = x; rg.pz = z; rg.pth = th; return; }   // first frame or a teleport
+  const d = (x - rg.px) * Math.sin(th) + (z - rg.pz) * Math.cos(th), yaw = wrapA(th - rg.pth) / dt;   // signed distance and turn rate
+  rg.px = x; rg.pz = z; rg.pth = th;
+  const v0 = rg.v; rg.v += (d / dt - rg.v) * Math.min(1, dt * 8);
+  rg.acc += ((rg.v - v0) / dt - rg.acc) * Math.min(1, dt * 6);
+  rg.spin = (rg.spin + d / rg.r) % (Math.PI * 2);
+  const steerT = Math.abs(rg.v) > 1 ? clamp(Math.atan(2.6 * yaw / rg.v), -0.5, 0.5) : rg.steer;
+  rg.steer += (steerT - rg.steer) * Math.min(1, dt * 10);
+  rg.lean += (clamp(yaw * rg.v * 0.004, -0.08, 0.08) - rg.lean) * Math.min(1, dt * 6);   // roll away from the turn
+  rg.pitch += (clamp(-rg.acc * 0.005, -0.05, 0.05) - rg.pitch) * Math.min(1, dt * 6);   // nose dips under braking
+  rg.model.rotation.set(rg.pitch, 0, rg.lean);
+  _qa.setFromAxisAngle(rg.axle, rg.spin);
+  for (const wh of rg.wheels) {
+    wh.o.quaternion.copy(wh.base).premultiply(_qa);
+    if (wh.front) wh.o.quaternion.premultiply(_qs.setFromAxisAngle(_up, rg.steer));
+  }
+  rg.bt = rg.acc < -4 && rg.v > 1 ? 0.3 : rg.bt - dt;   // brake lights, held briefly so they don't flicker
+  const on = rg.bt > 0; rg.tail.color.setHex(on ? 0xff2a2a : 0x4a0808); for (const s of rg.brakeGlow) s.visible = on;
+}
+// "POLICE" lettering for both sides of police cars
+let policeTex = null;
+function policeDecal(model) {
+  if (!policeTex) {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+    x.font = '900 78px Arial Black, Impact, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.lineWidth = 12; x.strokeStyle = '#0b1f5c'; x.strokeText('POLICE', 256, 50); x.fillStyle = '#ffffff'; x.fillText('POLICE', 256, 50);
+    policeTex = new THREE.CanvasTexture(c); policeTex.colorSpace = THREE.SRGBColorSpace; policeTex.anisotropy = 4;
+  }
+  const [w, h, l] = model.userData.dims, geo = new THREE.PlaneGeometry(l * 0.5, l * 0.5 * 96 / 512), mat = new THREE.MeshBasicMaterial({ map: policeTex, transparent: true, depthWrite: false });
+  for (const sx of [-1, 1]) { const p = new THREE.Mesh(geo, mat); p.position.set(sx * (w / 2 - 0.06), h * 0.42, 0); p.rotation.y = sx * Math.PI / 2; model.add(p); }
+  return mat;
+}
 function makeCar() {
   const g = new THREE.Group();
-  if (CARS) { g.add(CARS.car.clone(true)); return g; }
+  if (CARS) { const m = CARS.car.clone(true); g.add(m); g.userData.rig = rigModel(m); return g; }
   const body = new THREE.MeshLambertMaterial({ color: 0xe8402a });
   g.add(box(2, 0.7, 4.4, body, 0, 0.75, 0));
   g.add(box(1.7, 0.6, 2.2, new THREE.MeshLambertMaterial({ color: 0x222a33 }), 0, 1.4, -0.2));
@@ -489,10 +566,11 @@ const PLOOK = [
 function makePolice(k) {
   const g = new THREE.Group(), L = Object.assign({}, PLOOK[k] || PLOOK[0]);
   let mats;
+  let rig = null, decal = null;
   if (CARS) {   // own material copies so this car alone can turn black when destroyed
     const m = CARS[POLICE_KEYS[k] || 'cruiser'].clone(true); mats = [];
     m.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); mats.push(o.material); } });
-    g.add(m); L.roof = m.userData.h + 0.1;
+    g.add(m); L.roof = m.userData.h + 0.1; rig = rigModel(m); decal = policeDecal(m);
   } else {
     const mBody = new THREE.MeshLambertMaterial({ color: L.body }), mStripe = new THREE.MeshLambertMaterial({ color: L.stripe }), mCab = new THREE.MeshLambertMaterial({ color: L.cab });
     g.add(box(2, L.bh, 4.4, mBody, 0, 0.4 + L.bh / 2, 0));
@@ -502,8 +580,10 @@ function makePolice(k) {
   }
   const l1 = new THREE.MeshBasicMaterial({ color: 0xff2020 }), l2 = new THREE.MeshBasicMaterial({ color: 0x2060ff });
   g.add(box(0.7, 0.25, 0.4, l1, -0.45, L.roof, -0.2)); g.add(box(0.7, 0.25, 0.4, l2, 0.45, L.roof, -0.2));
+  const g1 = new THREE.Sprite(glows().red), g2 = new THREE.Sprite(glows().blue);   // light bar glow
+  g1.position.set(-0.45, L.roof + 0.1, -0.2); g2.position.set(0.45, L.roof + 0.1, -0.2); g1.scale.setScalar(2.2); g2.scale.setScalar(2.2); g.add(g1, g2);
   const mk = marker(circGeo, 0xff3344, L.mk, 80); g.add(mk);
-  g.userData = { mats, l1, l2, mk, dead: false, sm: 0, k, roof: L.roof };
+  g.userData = { mats, l1, l2, g1, g2, mk, dead: false, sm: 0, k, roof: L.roof, rig, decal };
   return g;
 }
 const hbBgGeo = new THREE.PlaneGeometry(2.3, 0.34), hbFillGeo = new THREE.PlaneGeometry(2, 0.2).translate(1, 0, 0), hbBgMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
@@ -513,13 +593,13 @@ function makeHpBar() {   // floating health bar for a damaged police car (kept i
   g.userData.fill = fill; g.visible = false; return g;
 }
 function removePolice(m) {
-  scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo && !o.userData.shared) o.geometry.dispose(); });
+  scene.remove(m); m.traverse(o => { if (o.geometry && o.geometry !== wheelGeo && o.geometry !== lampGeo && !o.userData.shared) o.geometry.dispose(); });
   if (m.userData.hb) { scene.remove(m.userData.hb); m.userData.hb.userData.fill.material.dispose(); }
 }
 const CIV_COLS = [0x3a6fd8, 0xe8c020, 0x3f9a4a, 0xb0b4bc];
 function makeCiv(m) {
   const g = new THREE.Group();
-  if (CARS) g.add(CARS['civ' + (m % 3)].clone(true));
+  if (CARS) { const c = CARS['civ' + (m % CIV_MODELS)].clone(true); g.add(c); g.userData.rig = rigModel(c); }
   else {
     g.add(box(2, 0.7, 4.4, new THREE.MeshLambertMaterial({ color: CIV_COLS[m % CIV_COLS.length] }), 0, 0.75, 0));
     g.add(box(1.7, 0.6, 2.2, new THREE.MeshLambertMaterial({ color: 0x222a33 }), 0, 1.4, -0.2));
@@ -1041,6 +1121,7 @@ let tAnim = 0;
 let carSmoke = 0;
 function syncScene(dt) {
   carMesh.position.set(V.car.x, 0, V.car.z); carMesh.rotation.y = V.car.th;
+  if (carMesh.userData.rig) animateRig(carMesh.userData.rig, V.car.x, V.car.z, V.car.th, dt);
   const chp = V.car.hp ?? 100;
   if (chp <= 50 && (carSmoke -= dt) <= 0) {   // damaged getaway car: grey smoke from the bonnet, black smoke and fire when nearly wrecked
     carSmoke = chp <= 25 ? 0.06 : 0.1;
@@ -1054,14 +1135,18 @@ function syncScene(dt) {
     const u = m.userData, dead = p.st === 2;
     if (dead !== u.dead) {
       u.dead = dead;
-      if (dead) { for (const mt of u.mats) mt.color.set(0x0a0a0a); u.l1.color.set(0x111111); u.l2.color.set(0x111111); u.mk.material.color.set(0x555555); explode(p.x, p.z); }
+      if (dead) {
+        for (const mt of u.mats) mt.color.set(0x0a0a0a); u.l1.color.set(0x111111); u.l2.color.set(0x111111); u.mk.material.color.set(0x555555); explode(p.x, p.z);
+        u.g1.visible = u.g2.visible = false; if (u.rig) u.rig.lamps.visible = false; if (u.decal) u.decal.opacity = 0.15;
+      }
     }
     if (dead) {   // burning wreck
       u.sm -= dt;
       if (u.sm <= 0) { u.sm = 0.12; emitPuff(p.x, 1.8, p.z, 0x2a2a2a); if (Math.random() < 0.6) emitFire(p.x, 1.2, p.z); }
     } else {
       const ph = Math.floor(tAnim * 8) % 2;
-      u.l1.color.set(ph ? 0xff2020 : 0x330808); u.l2.color.set(ph ? 0x081033 : 0x2060ff);
+      u.l1.color.set(ph ? 0xff2020 : 0x330808); u.l2.color.set(ph ? 0x081033 : 0x2060ff); u.g1.visible = !!ph; u.g2.visible = !ph;
+      if (u.rig) animateRig(u.rig, p.x, p.z, p.th, dt);
       if (p.hp <= PTYPES[p.k].hp / 2) { u.sm -= dt; if (u.sm <= 0) { u.sm = 0.07; emitPuff(p.x + Math.sin(p.th) * 1.8, 1.5, p.z + Math.cos(p.th) * 1.8); } }
     }
     const frac = p.hp / PTYPES[p.k].hp, showHb = !dead && frac < 1 && role !== 'dispatcher';
@@ -1079,6 +1164,7 @@ function syncScene(dt) {
     let m = tMeshes[i];
     if (!m || m.userData.m !== t.m) { if (m) scene.remove(m); m = tMeshes[i] = shadowy(makeCiv(t.m)); scene.add(m); }
     m.visible = true; m.position.set(t.x, 0, t.z); m.rotation.y = t.th;
+    if (m.userData.rig) animateRig(m.userData.rig, t.x, t.z, t.th, dt);
   });
   for (let i = V.traffic.length; i < tMeshes.length; i++) tMeshes[i].visible = false;
   cpCol.material.opacity = 0.3 + 0.15 * Math.sin(tAnim * 3); cpRing.rotation.z = tAnim;
