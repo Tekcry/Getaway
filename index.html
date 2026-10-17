@@ -256,30 +256,100 @@ function rayBox(ox, oy, oz, dx, dy, dz, mn, mx) {   // returns t or Infinity
 /* ================= three.js scene ================= */
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9ec3e6);
-const FOG = new THREE.Fog(0x9ec3e6, 160, 560);
-scene.add(new THREE.HemisphereLight(0xdfeeff, 0x555566, 0.9));
-const sun = new THREE.DirectionalLight(0xffffff, 1.0); sun.position.set(200, 400, 120); scene.add(sun);
+const SKY_TOP = 0x4f86d4, SKY_HORIZON = 0xf0d2ac;   // late afternoon
+scene.background = new THREE.Color(SKY_HORIZON);
+const FOG = new THREE.Fog(0xe2cbab, 150, 620);
+scene.add(new THREE.HemisphereLight(0xc9dcff, 0x5c4e3e, 0.75));
+// low warm sun; its shadow camera follows the getaway car (see updateSun)
+const SUN_DIR = new THREE.Vector3(-0.55, 0.62, 0.56).normalize();
+const sun = new THREE.DirectionalLight(0xffe2b4, 1.7); sun.position.copy(SUN_DIR).multiplyScalar(300); scene.add(sun); scene.add(sun.target);
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.04;
+Object.assign(sun.shadow.camera, { left: -110, right: 110, top: 110, bottom: -110, near: 10, far: 700 });
+function updateSun() {
+  const c = V.car; sun.target.position.set(c.x, 0, c.z);
+  sun.position.set(c.x + SUN_DIR.x * 300, SUN_DIR.y * 300, c.z + SUN_DIR.z * 300);
+}
 const persp = new THREE.PerspectiveCamera(70, 1, 0.1, 900);
 const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 800); ortho.layers.enable(1);
 let cam = persp;
+// gradient sky dome centred on the 3D camera
+const sky = (() => {
+  const g = new THREE.SphereGeometry(700, 32, 16), p = g.attributes.position, top = new THREE.Color(SKY_TOP), hor = new THREE.Color(SKY_HORIZON), col = [];
+  for (let i = 0; i < p.count; i++) { const c = hor.clone().lerp(top, Math.pow(clamp(p.getY(i) / 700, 0, 1), 0.55)); col.push(c.r, c.g, c.b); }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+  m.renderOrder = -1; scene.add(m); return m;
+})();
+const shadowy = g => { g.traverse(o => { if (o.isMesh && o.layers.mask === 1) o.castShadow = true; }); return g; };
 
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(SIZE + 80, SIZE + 80), new THREE.MeshLambertMaterial({ color: 0x2b2d33 }));
-ground.rotation.x = -Math.PI / 2; ground.position.set(SIZE / 2, 0, SIZE / 2); scene.add(ground);
-const lineMat = new THREE.MeshBasicMaterial({ color: 0x6d6a4a });
-for (let i = 0; i <= GRID; i++) {
-  const a = new THREE.Mesh(new THREE.PlaneGeometry(0.5, SIZE), lineMat); a.rotation.x = -Math.PI / 2; a.position.set(R(i), 0.03, SIZE / 2); scene.add(a);
-  const b = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, 0.5), lineMat); b.rotation.x = -Math.PI / 2; b.position.set(SIZE / 2, 0.03, R(i)); scene.add(b);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(SIZE + 80, SIZE + 80), new THREE.MeshLambertMaterial({ color: 0x3b3d43 }));
+ground.rotation.x = -Math.PI / 2; ground.position.set(SIZE / 2, 0, SIZE / 2); ground.receiveShadow = true; scene.add(ground);
+
+/* static street furniture (same for every city): pavements with kerbs, dashed centre lines, zebra crossings */
+{
+  const inst = (geo, mat, list) => {
+    const m = new THREE.InstancedMesh(geo, mat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
+    list.forEach(([x, y, z, rot], i) => m.setMatrixAt(i, M.compose(new THREE.Vector3(x, y, z), q.setFromAxisAngle(up, rot), one)));
+    m.receiveShadow = true; scene.add(m);
+  };
+  const walk = [], dash = [], zebra = [];
+  for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) walk.push([ROAD + i * PITCH + BLOCK / 2, 0.08, ROAD + j * PITCH + BLOCK / 2, 0]);
+  for (let i = 0; i <= GRID; i++) for (let j = 0; j < GRID; j++) {
+    const s = ROAD + j * PITCH;   // road segment between intersections runs s .. s + BLOCK
+    for (const [rot, at] of [[0, (a, b) => [R(i) + b, a]], [Math.PI / 2, (a, b) => [a, R(i) + b]]]) {   // vertical road x = R(i), horizontal road z = R(i)
+      for (let k = 0; k < 5; k++) { const [x, z] = at(s + 7 + k * 6.5, 0); dash.push([x, 0.03, z, rot]); }
+      for (const end of [s + 2.2, s + BLOCK - 2.2]) for (let k = -3; k <= 3; k++) { const [x, z] = at(end, k * 1.55); zebra.push([x, 0.031, z, rot]); }
+    }
+  }
+  inst(new THREE.BoxGeometry(BLOCK + 3, 0.16, BLOCK + 3), new THREE.MeshLambertMaterial({ color: 0x8e8a83 }), walk);
+  const paint = new THREE.MeshLambertMaterial({ color: 0xd9d6cc });
+  inst(new THREE.PlaneGeometry(0.22, 3).rotateX(-Math.PI / 2), paint, dash);
+  inst(new THREE.PlaneGeometry(0.8, 3.2).rotateX(-Math.PI / 2), paint, zebra);
 }
+
+/* building facades: procedural window textures, one per palette */
+const FACADES = [
+  { wall: '#bdb4a6', win: '#3d4a5c', frame: '#8d8578' },   // concrete
+  { wall: '#9c5a46', win: '#33404f', frame: '#e7dccb' },   // brick
+  { wall: '#d2bb92', win: '#45525f', frame: '#a8946f' },   // sandstone
+  { wall: '#7f8c9b', win: '#28394d', frame: '#6a7684', glass: true }   // glass tower
+].map((f, n) => {
+  const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'), rnd = mulberry32(n + 7);
+  x.fillStyle = f.wall; x.fillRect(0, 0, 256, 256);
+  for (let fy = 0; fy < 4; fy++) for (let wx = 0; wx < 4; wx++) {   // 4 x 4 windows per tile = 12 m x 14 m
+    const X = wx * 64, Y = fy * 64, lit = rnd() < 0.12;
+    if (f.glass) { x.fillStyle = f.frame; x.fillRect(X, Y + 54, 64, 10); x.fillRect(X + 60, Y, 4, 64); }
+    else { x.fillStyle = f.frame; x.fillRect(X + 16, Y + 12, 32, 40); }
+    x.fillStyle = lit ? '#f2dca0' : f.win; x.fillRect(f.glass ? X : X + 19, f.glass ? Y : Y + 15, f.glass ? 60 : 26, f.glass ? 54 : 34);
+    x.fillStyle = 'rgba(255,255,255,0.12)'; x.fillRect(f.glass ? X : X + 19, f.glass ? Y : Y + 15, f.glass ? 60 : 26, 5);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+  return t;
+});
+const ventMat = new THREE.MeshLambertMaterial({ color: 0x9a9a98 });
 let cityGroup = null;
 function buildWorld(c) {
-  if (cityGroup) { scene.remove(cityGroup); cityGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
+  if (cityGroup) {
+    scene.remove(cityGroup);
+    cityGroup.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      for (const m of [].concat(o.material || [])) if (m !== ventMat) { if (m.map) m.map.dispose(); m.dispose(); }
+    });
+  }
   cityGroup = new THREE.Group();
   for (const b of c.buildings) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(BLOCK, b.h, BLOCK), new THREE.MeshLambertMaterial({ color: b.col }));
-    m.position.set((b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2); cityGroup.add(m);
+    const hsh = Math.abs((b.x0 * 73856093) ^ (b.z0 * 19349663)), f = FACADES[hsh % FACADES.length];
+    const t = f.clone(); t.repeat.set(BLOCK / 12, b.h / 14); t.offset.set(0, (hsh % 7) / 7);
+    const shade = 0.82 + (hsh % 5) * 0.045, side = new THREE.MeshLambertMaterial({ map: t, color: new THREE.Color(shade, shade, shade) });
+    const roof = new THREE.MeshLambertMaterial({ color: b.col }), m = new THREE.Mesh(new THREE.BoxGeometry(BLOCK, b.h, BLOCK), [side, side, roof, roof, side, side]);
+    m.position.set((b.x0 + b.x1) / 2, b.h / 2, (b.z0 + b.z1) / 2); m.castShadow = m.receiveShadow = true; cityGroup.add(m);
+    if (hsh % 3 === 0) {   // rooftop plant room on some buildings
+      const v = new THREE.Mesh(new THREE.BoxGeometry(8, 3, 6), ventMat);
+      v.position.set(m.position.x + (hsh % 11) - 5, b.h + 1.5, m.position.z + (hsh % 13) - 6); v.castShadow = true; cityGroup.add(v);
+    }
   }
   for (const w of c.walls) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w.x1 - w.x0, w.h, w.z1 - w.z0), new THREE.MeshLambertMaterial({ color: 0x80343a }));
@@ -349,10 +419,10 @@ const circGeo = new THREE.CircleGeometry(1, 24), ringGeo = new THREE.RingGeometr
 function marker(geo, color, radius, y) {
   const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color })); m.rotation.x = -Math.PI / 2; m.scale.set(radius, radius, 1); m.position.y = y; m.layers.set(1); return m;
 }
-let carMesh = makeCar(); scene.add(carMesh);
+let carMesh = shadowy(makeCar()); scene.add(carMesh);
 const carMarker = marker(circGeo, 0xb6ff00, 10, 82); carMesh.add(carMarker);
 loadCars().then(() => {   // the lobby buttons stay disabled until the models are loaded (or have failed)
-  if (CARS) { scene.remove(carMesh); carMesh = makeCar(); carMesh.add(carMarker); scene.add(carMesh); }
+  if (CARS) { scene.remove(carMesh); carMesh = shadowy(makeCar()); carMesh.add(carMarker); scene.add(carMesh); }
   $('bHost').disabled = $('bJoin').disabled = false;
 });
 
@@ -848,7 +918,7 @@ function startGame(seed) {
   renderer.domElement.style.display = 'block'; $('hud').style.display = 'block';
   for (const el of document.querySelectorAll('.hg')) el.style.display = 'none';
   const disp = role === 'dispatcher';
-  scene.fog = disp ? null : FOG;
+  scene.fog = disp ? null : FOG; sky.visible = !disp; sun.castShadow = !disp; scene.background.set(disp ? 0x1a1d24 : SKY_HORIZON);
   $('hDriver').style.display = role === 'driver' ? 'block' : 'none';
   $('hGunner').style.display = role === 'gunner' ? 'block' : 'none';
   $('hDisp').style.display = disp ? 'block' : 'none';
@@ -885,7 +955,7 @@ function syncScene(dt) {
   carMesh.position.set(V.car.x, 0, V.car.z); carMesh.rotation.y = V.car.th;
   for (const [id, p] of V.police) {
     let m = pMeshes.get(id);
-    if (!m) { m = makePolice(p.k); scene.add(m); pMeshes.set(id, m); }
+    if (!m) { m = shadowy(makePolice(p.k)); scene.add(m); pMeshes.set(id, m); }
     m.position.set(p.x, 0, p.z); m.rotation.y = p.th;
     const u = m.userData, dead = p.st === 2;
     if (dead !== u.dead) {
@@ -910,7 +980,7 @@ function syncScene(dt) {
   for (const [id, m] of pMeshes) if (!V.police.has(id)) { removePolice(m); pMeshes.delete(id); }
   V.traffic.forEach((t, i) => {
     let m = tMeshes[i];
-    if (!m || m.userData.m !== t.m) { if (m) scene.remove(m); m = tMeshes[i] = makeCiv(t.m); scene.add(m); }
+    if (!m || m.userData.m !== t.m) { if (m) scene.remove(m); m = tMeshes[i] = shadowy(makeCiv(t.m)); scene.add(m); }
     m.visible = true; m.position.set(t.x, 0, t.z); m.rotation.y = t.th;
   });
   for (let i = V.traffic.length; i < tMeshes.length; i++) tMeshes[i].visible = false;
@@ -1107,6 +1177,7 @@ function frame(now) {
   const dt = Math.min(0.1, (now - lastF) / 1000); lastF = now; tAnim += dt;
   if (phase === 'play' || phase === 'end') {
     updateView(); syncScene(dt); updateCamera(dt); updateGun(dt); updateHud();
+    if (cam === persp) { sky.position.copy(persp.position); updateSun(); }
     renderer.render(scene, cam);
   }
   updateAudio();
